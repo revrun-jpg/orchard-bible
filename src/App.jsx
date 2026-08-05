@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
+import mcheyneData from './data/mcheyne.json'
+
+const ESV_API_KEY = import.meta.env.VITE_ESV_API_KEY
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -8,6 +11,9 @@ export default function App() {
   const [displayName, setDisplayName] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
+  const [todaysReading, setTodaysReading] = useState(null)
+  const [passageTexts, setPassageTexts] = useState({})
+  const [expandedPassage, setExpandedPassage] = useState(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session))
@@ -25,6 +31,40 @@ export default function App() {
         if (data?.display_name) setDisplayName(data.display_name)
       })
   }, [session])
+
+  useEffect(() => {
+    const now = new Date()
+    const monthNames = ['January','February','March','April','May','June',
+      'July','August','September','October','November','December']
+    const todayStr = `${monthNames[now.getMonth()]} ${now.getDate()}`
+    const entry = mcheyneData.data.find(d => d.date === todayStr)
+    setTodaysReading(entry)
+  }, [])
+
+  useEffect(() => {
+    if (!todaysReading) return
+
+    const keys = ['family1', 'family2', 'secret1', 'secret2']
+    keys.forEach(key => {
+      const passage = todaysReading[key]
+      if (!passage) return
+
+      const params = new URLSearchParams({
+        q: passage,
+        'include-footnotes': 'false',
+        'include-headings': 'false',
+        'include-verse-numbers': 'true',
+      })
+
+      fetch(`https://api.esv.org/v3/passage/text/?${params}`, {
+        headers: { Authorization: `Token ${ESV_API_KEY}` },
+      })
+        .then(res => res.json())
+        .then(data => {
+          setPassageTexts(prev => ({ ...prev, [key]: data.passages?.[0] || '' }))
+        })
+    })
+  }, [todaysReading])
 
   async function handleSignUp() {
     setLoading(true)
@@ -54,12 +94,48 @@ export default function App() {
     await supabase.auth.signOut()
   }
 
+  const passages = todaysReading ? [
+    { key: 'family1', label: 'Family 1', passage: todaysReading.family1 },
+    { key: 'family2', label: 'Family 2', passage: todaysReading.family2 },
+    { key: 'secret1', label: 'Secret 1', passage: todaysReading.secret1 },
+    { key: 'secret2', label: 'Secret 2', passage: todaysReading.secret2 },
+  ] : []
+
   if (session) {
     return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-8 w-full max-w-sm">
           <h1 className="text-xl font-semibold text-stone-800 mb-1">Orchard Bible</h1>
-          <p className="text-sm text-stone-500 mb-6">{session.user.email}</p>
+          <p className="text-sm text-stone-500 mb-6">{displayName || session.user.email}</p>
+
+          {todaysReading && (
+            <div className="mb-6">
+              <p className="text-xs font-medium text-stone-400 uppercase tracking-wide mb-3">
+                Today — {todaysReading.date}
+              </p>
+              <div className="space-y-2">
+                {passages.map(({ key, label, passage }) => (
+                  <div
+                    key={key}
+                    className="border border-stone-200 rounded-lg overflow-hidden"
+                  >
+                    <button
+                      onClick={() => setExpandedPassage(expandedPassage === key ? null : key)}
+                      className="flex items-center justify-between w-full px-3 py-2 text-left"
+                    >
+                      <span className="text-xs text-stone-400">{label}</span>
+                      <span className="text-sm text-stone-700 font-medium">{passage}</span>
+                    </button>
+                    {expandedPassage === key && (
+                      <div className="px-3 py-2 border-t border-stone-200 text-sm text-stone-600 whitespace-pre-wrap">
+                        {passageTexts[key] || 'Loading…'}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <label className="text-xs text-stone-500 mb-1 block">Your display name</label>
           <input
