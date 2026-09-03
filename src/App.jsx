@@ -108,13 +108,21 @@ export default function App() {
         return
       }
 
-      // Group by date
+      // Group by date (normalize to YYYY-MM-DD)
       const groups = {}
       (data || []).forEach(row => {
-        const d = row.reading_date
-        if (!groups[d]) groups[d] = new Set()
-        groups[d].add(row.passage)
+        const dateKey = row?.reading_date ? new Date(row.reading_date).toISOString().slice(0, 10) : null
+        if (!dateKey) return
+        if (!groups[dateKey]) groups[dateKey] = new Set()
+        groups[dateKey].add(row.passage)
       })
+
+      // Merge local today's completions so toggles update streak immediately
+      const todayKey = new Date().toISOString().slice(0, 10)
+      if (todaysCompletions && todaysCompletions.length) {
+        if (!groups[todayKey]) groups[todayKey] = new Set()
+        todaysCompletions.forEach(p => groups[todayKey].add(p))
+      }
 
       // Walk backwards from today counting consecutive days with 4 passages
       let count = 0
