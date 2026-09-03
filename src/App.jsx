@@ -69,23 +69,24 @@ export default function App() {
   }, [todaysReading])
 
   // Fetch today's completions for current user
-  useEffect(() => {
+  const fetchTodaysCompletions = async () => {
     if (!session || !todaysReading) return
-    const fetchCompletions = async () => {
-      const today = new Date().toISOString().slice(0, 10)
-      const { data, error } = await supabase
-        .from('completions')
-        .select('passage')
-        .eq('user_id', session.user.id)
-        .eq('reading_date', today)
+    const today = new Date().toISOString().slice(0, 10)
+    const { data, error } = await supabase
+      .from('completions')
+      .select('passage')
+      .eq('user_id', session.user.id)
+      .eq('reading_date', today)
 
-      if (error) {
-        console.error('Error fetching completions', error)
-        return
-      }
-      setTodaysCompletions(data?.map(d => d.passage) || [])
+    if (error) {
+      console.error('Error fetching completions', error)
+      return
     }
-    fetchCompletions()
+    setTodaysCompletions(data?.map(d => d.passage) || [])
+  }
+
+  useEffect(() => {
+    fetchTodaysCompletions()
   }, [session, todaysReading])
 
   // Compute streak: consecutive days with all 4 passages completed
@@ -123,6 +124,10 @@ export default function App() {
         if (!groups[todayKey]) groups[todayKey] = new Set()
         todaysCompletions.forEach(p => groups[todayKey].add(p))
       }
+
+      console.debug('computeStreak: fetched rows', (data || []).length)
+      console.debug('computeStreak: groups keys', Object.keys(groups))
+      console.debug('computeStreak: today group size', groups[todayKey]?.size || 0)
 
       // Walk backwards from today counting consecutive days with 4 passages
       let count = 0
@@ -186,6 +191,8 @@ export default function App() {
       const { error } = await supabase.from('completions').insert([{ user_id: session.user.id, reading_date: today, passage }])
       if (error) {
         console.error('Insert completion error', error)
+      } else {
+        await fetchTodaysCompletions()
       }
     } else {
       // remove
@@ -193,6 +200,8 @@ export default function App() {
       const { error } = await supabase.from('completions').delete().match({ user_id: session.user.id, reading_date: today, passage })
       if (error) {
         console.error('Delete completion error', error)
+      } else {
+        await fetchTodaysCompletions()
       }
     }
   }
