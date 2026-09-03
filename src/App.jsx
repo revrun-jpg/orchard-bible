@@ -14,6 +14,8 @@ export default function App() {
   const [todaysReading, setTodaysReading] = useState(null)
   const [passageTexts, setPassageTexts] = useState({})
   const [expandedPassage, setExpandedPassage] = useState(null)
+  const [todaysCompletions, setTodaysCompletions] = useState([])
+  const [streak, setStreak] = useState(0)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session))
@@ -66,6 +68,71 @@ export default function App() {
     })
   }, [todaysReading])
 
+  // Fetch today's completions for current user
+  useEffect(() => {
+    if (!session || !todaysReading) return
+    const fetchCompletions = async () => {
+      const today = new Date().toISOString().slice(0, 10)
+      const { data, error } = await supabase
+        .from('completions')
+        .select('passage')
+        .eq('user_id', session.user.id)
+        .eq('reading_date', today)
+
+      if (error) {
+        console.error('Error fetching completions', error)
+        return
+      }
+      setTodaysCompletions(data?.map(d => d.passage) || [])
+    }
+    fetchCompletions()
+  }, [session, todaysReading])
+
+  // Compute streak: consecutive days with all 4 passages completed
+  useEffect(() => {
+    if (!session) return
+    const computeStreak = async () => {
+      // fetch last 60 days of completions for this user
+      const since = new Date()
+      since.setDate(since.getDate() - 60)
+      const sinceStr = since.toISOString().slice(0, 10)
+      const { data, error } = await supabase
+        .from('completions')
+        .select('reading_date, passage')
+        .eq('user_id', session.user.id)
+        .gte('reading_date', sinceStr)
+        .order('reading_date', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching completions for streak', error)
+        return
+      }
+
+      // Group by date
+      const groups = {}
+      (data || []).forEach(row => {
+        const d = row.reading_date
+        if (!groups[d]) groups[d] = new Set()
+        groups[d].add(row.passage)
+      })
+
+      // Walk backwards from today counting consecutive days with 4 passages
+      let count = 0
+      const today = new Date()
+      while (true) {
+        const dStr = today.toISOString().slice(0, 10)
+        if (groups[dStr] && groups[dStr].size >= 4) {
+          count += 1
+          today.setDate(today.getDate() - 1)
+          continue
+        }
+        break
+      }
+      setStreak(count)
+    }
+    computeStreak()
+  }, [session, todaysCompletions])
+
   async function handleSignUp() {
     setLoading(true)
     const { error } = await supabase.auth.signUp({ email, password })
@@ -101,6 +168,27 @@ export default function App() {
     { key: 'secret2', label: 'Secret 2', passage: todaysReading.secret2 },
   ] : []
 
+  const toggleCompletion = async (passage, checked) => {
+    if (!session) return
+    const today = new Date().toISOString().slice(0, 10)
+
+    if (checked) {
+      // add
+      setTodaysCompletions(prev => Array.from(new Set([...prev, passage])))
+      const { error } = await supabase.from('completions').insert([{ user_id: session.user.id, reading_date: today, passage }])
+      if (error) {
+        console.error('Insert completion error', error)
+      }
+    } else {
+      // remove
+      setTodaysCompletions(prev => prev.filter(p => p !== passage))
+      const { error } = await supabase.from('completions').delete().match({ user_id: session.user.id, reading_date: today, passage })
+      if (error) {
+        console.error('Delete completion error', error)
+      }
+    }
+  }
+
   if (session) {
     return (
       <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4">
@@ -110,22 +198,39 @@ export default function App() {
 
           {todaysReading && (
             <div className="mb-6">
-              <p className="text-xs font-medium text-stone-400 uppercase tracking-wide mb-3">
-                Today — {todaysReading.date}
-              </p>
+              <div className="flex items-baseline justify-between mb-3">
+                <p className="text-xs font-medium text-stone-400 uppercase tracking-wide">
+                  Today — {todaysReading.date}
+                </p>
+                <p className="text-xs text-stone-400">🔥 {streak} day streak</p>
+              </div>
+              <p className="text-xs text-stone-500 mb-2">{todaysCompletions.length} of 4 read today</p>
               <div className="space-y-2">
                 {passages.map(({ key, label, passage }) => (
                   <div
                     key={key}
                     className="border border-stone-200 rounded-lg overflow-hidden"
                   >
-                    <button
-                      onClick={() => setExpandedPassage(expandedPassage === key ? null : key)}
-                      className="flex items-center justify-between w-full px-3 py-2 text-left"
-                    >
-                      <span className="text-xs text-stone-400">{label}</span>
-                      <span className="text-sm text-stone-700 font-medium">{passage}</span>
-                    </button>
+                    <div className="flex items-center justify-between w-full px-3 py-2 text-left">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={todaysCompletions.includes(passage)}
+                          onChange={e => toggleCompletion(passage, e.target.checked)}
+                          className="w-4 h-4"
+                        />
+                        <div>
+                          <div className="text-xs text-stone-400">{label}</div>
+                          <div className="text-sm text-stone-700 font-medium truncate">{passage}</div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setExpandedPassage(expandedPassage === key ? null : key)}
+                        className="text-sm text-stone-400"
+                      >
+                        {expandedPassage === key ? 'Close' : 'Open'}
+                      </button>
+                    </div>
                     {expandedPassage === key && (
                       <div className="px-3 py-2 border-t border-stone-200 text-sm text-stone-600 whitespace-pre-wrap">
                         {passageTexts[key] || 'Loading…'}
