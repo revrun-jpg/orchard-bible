@@ -109,10 +109,14 @@ export default function App() {
         return
       }
 
+      // Ensure data is an array
+      console.log('computeStreak: raw data', data)
+      const rows = Array.isArray(data) ? data : []
+
       // Group by date (normalize to YYYY-MM-DD)
       const groups = {}
-      (data || []).forEach(row => {
-        const dateKey = row?.reading_date ? new Date(row.reading_date).toISOString().slice(0, 10) : null
+      rows.forEach(row => {
+        const dateKey = row && row.reading_date ? new Date(row.reading_date).toISOString().slice(0, 10) : null
         if (!dateKey) return
         if (!groups[dateKey]) groups[dateKey] = new Set()
         groups[dateKey].add(row.passage)
