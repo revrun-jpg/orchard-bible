@@ -125,9 +125,9 @@ export default function App() {
         todaysCompletions.forEach(p => groups[todayKey].add(p))
       }
 
-      console.debug('computeStreak: fetched rows', (data || []).length)
-      console.debug('computeStreak: groups keys', Object.keys(groups))
-      console.debug('computeStreak: today group size', groups[todayKey]?.size || 0)
+      console.log('computeStreak: fetched rows', (data || []).length)
+      console.log('computeStreak: groups keys', Object.keys(groups))
+      console.log('computeStreak: today group size', groups[todayKey]?.size || 0)
 
       // Walk backwards from today counting consecutive days with 4 passages
       let count = 0
