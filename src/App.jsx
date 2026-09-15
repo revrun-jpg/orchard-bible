@@ -19,6 +19,15 @@ export default function App() {
   const [communityMembers, setCommunityMembers] = useState([])
   const [leaderboard, setLeaderboard] = useState([])
 
+  const getSeasonalFruitEmoji = () => {
+    const month = new Date().getMonth() + 1
+
+    if (month >= 3 && month <= 5) return '🥝'
+    if (month >= 6 && month <= 8) return '🍉'
+    if (month >= 9 && month <= 11) return '🍎'
+    return '🍊'
+  }
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session))
     supabase.auth.onAuthStateChange((_event, session) => setSession(session))
@@ -128,9 +137,20 @@ export default function App() {
           completedAll: completedToday.size >= 4,
         }
       })
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .sort((a, b) => {
+        if (a.completedCount === b.completedCount) return a.name.localeCompare(b.name)
+        return b.completedCount - a.completedCount
+      })
 
     setCommunityMembers(members)
+
+    const membersCompletedToday = members.filter(member => member.completedAll).length
+    const percentCompleted = members.length === 0 ? 0 : Math.round((membersCompletedToday / members.length) * 100)
+    const summary = `${percentCompleted}% of the congregation has read today`
+    setCommunityMembers(prev => {
+      const nextMembers = members.map(member => ({ ...member, summary }))
+      return nextMembers
+    })
 
     const leaderboardData = (Array.isArray(profileRows) ? profileRows : [])
       .map(profile => {
@@ -359,27 +379,46 @@ export default function App() {
           )}
 
           <div className="mb-6">
-            <div className="mb-3">
+            <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-stone-700">Orchard Community</h2>
+              <span className="rounded-full bg-stone-100 px-2 py-1 text-[10px] font-medium tracking-wide text-stone-600 uppercase">
+                {communityMembers.filter(member => member.completedAll).length} complete
+              </span>
+            </div>
+            <div className="mb-3 rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-amber-50 to-yellow-50 px-3 py-2.5 text-sm font-semibold text-emerald-800 shadow-sm">
+              {communityMembers.length === 0
+                ? `${getSeasonalFruitEmoji()} 0% of the congregation has read today`
+                : `${getSeasonalFruitEmoji()} ${Math.round((communityMembers.filter(member => member.completedAll).length / communityMembers.length) * 100)}% of the congregation has read today`}
             </div>
             <div className="space-y-2">
               {communityMembers.length === 0 ? (
                 <p className="text-xs text-stone-400">No members yet.</p>
               ) : (
                 communityMembers.map(member => (
-                  <div key={member.id} className="flex items-center justify-between text-sm text-stone-700">
-                    <div className="flex items-center gap-2">
-                      <span>{member.name}</span>
-                      {member.completedAll && <span>✅</span>}
+                  <div
+                    key={member.id}
+                    className={`flex items-center justify-between rounded-lg border px-2.5 py-2 text-sm ${
+                      member.completedCount === 0
+                        ? 'border-stone-100 bg-stone-50 text-stone-500'
+                        : member.completedAll
+                          ? 'border-amber-300 bg-gradient-to-r from-amber-100 via-emerald-50 to-emerald-100 text-emerald-800 shadow-sm'
+                          : 'border-stone-200 bg-white text-stone-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="truncate">{member.name}</span>
+                      {member.completedAll && <span aria-label="Completed all passages">✅</span>}
                     </div>
-                    <span className="text-stone-500">{member.completedCount}/4</span>
+                    <span className="ml-3 shrink-0 text-xs font-medium text-stone-600">
+                      {member.completedCount}/4
+                    </span>
                   </div>
                 ))
               )}
             </div>
           </div>
 
-          <div className="mb-6">
+          <div className="border-t border-stone-200 pt-5 mb-6">
             <div className="mb-3">
               <h2 className="text-sm font-semibold text-stone-700">Streak leaderboard</h2>
             </div>
@@ -388,12 +427,19 @@ export default function App() {
                 <p className="text-xs text-stone-400">No streaks yet.</p>
               ) : (
                 leaderboard.map(member => (
-                  <div key={member.id} className="flex items-center justify-between text-sm text-stone-700">
-                    <div className="flex items-center gap-2">
-                      <span className="w-5 text-stone-400">#{member.rank}</span>
-                      <span>{member.name}</span>
+                  <div
+                    key={member.id}
+                    className="flex items-center justify-between rounded-xl border border-stone-200 bg-gradient-to-r from-stone-50 to-white px-3 py-2 shadow-sm"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-stone-900 text-[10px] font-semibold text-white">
+                        #{member.rank}
+                      </span>
+                      <span className="truncate text-sm font-medium text-stone-700">{member.name}</span>
                     </div>
-                    <span className="text-stone-500">🔥 {member.streak}</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">
+                      🔥 {member.streak}
+                    </span>
                   </div>
                 ))
               )}
