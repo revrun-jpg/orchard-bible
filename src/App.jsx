@@ -16,6 +16,8 @@ export default function App() {
   const [expandedPassage, setExpandedPassage] = useState(null)
   const [todaysCompletions, setTodaysCompletions] = useState([])
   const [streak, setStreak] = useState(0)
+  const [communityMembers, setCommunityMembers] = useState([])
+  const [leaderboard, setLeaderboard] = useState([])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session))
@@ -85,9 +87,104 @@ export default function App() {
     setTodaysCompletions(data?.map(d => d.passage) || [])
   }
 
+  const fetchCommunityData = async () => {
+    if (!session) return
+
+    const { data: profileRows, error: profileError } = await supabase
+      .from('profiles')
+      .select('id, display_name')
+
+    if (profileError) {
+      console.error('Error fetching profiles', profileError)
+      return
+    }
+
+    const { data: completionRows, error: completionError } = await supabase
+      .from('completions')
+      .select('user_id, reading_date, passage')
+
+    if (completionError) {
+      console.error('Error fetching community completions', completionError)
+      return
+    }
+
+    const todayKey = new Date().toISOString().slice(0, 10)
+    const groupedByUser = {}
+
+    ;(Array.isArray(completionRows) ? completionRows : []).forEach(row => {
+      if (!row?.user_id || !row?.reading_date) return
+      if (!groupedByUser[row.user_id]) groupedByUser[row.user_id] = {}
+      if (!groupedByUser[row.user_id][row.reading_date]) groupedByUser[row.user_id][row.reading_date] = new Set()
+      groupedByUser[row.user_id][row.reading_date].add(row.passage)
+    })
+
+    const members = (Array.isArray(profileRows) ? profileRows : [])
+      .map(profile => {
+        const completedToday = groupedByUser[profile.id]?.[todayKey] || new Set()
+        return {
+          id: profile.id,
+          name: profile.display_name || 'Anonymous',
+          completedCount: completedToday.size,
+          completedAll: completedToday.size >= 4,
+        }
+      })
+      .sort((a, b) => a.name.localeCompare(b.name))
+
+    setCommunityMembers(members)
+
+    const leaderboardData = (Array.isArray(profileRows) ? profileRows : [])
+      .map(profile => {
+        const userDates = groupedByUser[profile.id] || {}
+        let streakCount = 0
+        const cursor = new Date()
+
+        while (true) {
+          const dateKey = cursor.toISOString().slice(0, 10)
+          const uniquePassages = userDates[dateKey]?.size || 0
+
+          if (uniquePassages >= 4) {
+            streakCount += 1
+            cursor.setDate(cursor.getDate() - 1)
+            continue
+          }
+          break
+        }
+
+        return {
+          id: profile.id,
+          name: profile.display_name || 'Anonymous',
+          streak: streakCount,
+        }
+      })
+      .sort((a, b) => b.streak - a.streak || a.name.localeCompare(b.name))
+      .map((member, index) => ({ ...member, rank: index + 1 }))
+
+    setLeaderboard(leaderboardData)
+  }
+
   useEffect(() => {
     fetchTodaysCompletions()
   }, [session, todaysReading])
+
+  useEffect(() => {
+    if (!session) return
+    fetchCommunityData()
+  }, [session])
+
+  useEffect(() => {
+    if (!session) return
+
+    const communityChannel = supabase
+      .channel('orchard-community-updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'completions' }, () => {
+        fetchCommunityData()
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(communityChannel)
+    }
+  }, [session])
 
   // Compute streak: consecutive days with all 4 passages completed
   useEffect(() => {
@@ -260,6 +357,48 @@ export default function App() {
               </div>
             </div>
           )}
+
+          <div className="mb-6">
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold text-stone-700">Orchard Community</h2>
+            </div>
+            <div className="space-y-2">
+              {communityMembers.length === 0 ? (
+                <p className="text-xs text-stone-400">No members yet.</p>
+              ) : (
+                communityMembers.map(member => (
+                  <div key={member.id} className="flex items-center justify-between text-sm text-stone-700">
+                    <div className="flex items-center gap-2">
+                      <span>{member.name}</span>
+                      {member.completedAll && <span>✅</span>}
+                    </div>
+                    <span className="text-stone-500">{member.completedCount}/4</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold text-stone-700">Streak leaderboard</h2>
+            </div>
+            <div className="space-y-2">
+              {leaderboard.length === 0 ? (
+                <p className="text-xs text-stone-400">No streaks yet.</p>
+              ) : (
+                leaderboard.map(member => (
+                  <div key={member.id} className="flex items-center justify-between text-sm text-stone-700">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 text-stone-400">#{member.rank}</span>
+                      <span>{member.name}</span>
+                    </div>
+                    <span className="text-stone-500">🔥 {member.streak}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
 
           <label className="text-xs text-stone-500 mb-1 block">Your display name</label>
           <input
