@@ -19,3 +19,69 @@ button,
 input {
 	font: inherit;
 }
+
+.reading-mode {
+	animation: reading-mode-in 220ms ease-out both;
+}
+
+.reading-mode-out {
+	animation: reading-mode-out 220ms ease-in both;
+}
+
+.reading-page {
+	animation-duration: 240ms;
+	animation-timing-function: ease-out;
+	animation-fill-mode: both;
+}
+
+.reading-page-next {
+	animation-name: reading-page-next;
+}
+
+.reading-page-previous {
+	animation-name: reading-page-previous;
+}
+
+@keyframes reading-mode-in {
+	from {
+		opacity: 0;
+		transform: translateY(14px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes reading-mode-out {
+	from {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	to {
+		opacity: 0;
+		transform: translateY(14px);
+	}
+}
+
+@keyframes reading-page-next {
+	from {
+		opacity: 0;
+		transform: translateX(22px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+@keyframes reading-page-previous {
+	from {
+		opacity: 0;
+		transform: translateX(-22px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}

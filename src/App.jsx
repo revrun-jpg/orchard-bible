@@ -13,7 +13,10 @@ export default function App() {
   const [message, setMessage] = useState('')
   const [todaysReading, setTodaysReading] = useState(null)
   const [passageTexts, setPassageTexts] = useState({})
-  const [expandedPassage, setExpandedPassage] = useState(null)
+  const [readingPassageIndex, setReadingPassageIndex] = useState(null)
+  const [readingDirection, setReadingDirection] = useState('next')
+  const [touchStartX, setTouchStartX] = useState(null)
+  const [isClosingReadingMode, setIsClosingReadingMode] = useState(false)
   const [todaysCompletions, setTodaysCompletions] = useState([])
   const [streak, setStreak] = useState(0)
   const [communityMembers, setCommunityMembers] = useState([])
@@ -309,6 +312,60 @@ export default function App() {
     { key: 'secret2', label: 'Secret 2', passage: todaysReading.secret2 },
   ] : []
 
+  useEffect(() => {
+    if (readingPassageIndex === null) return
+
+    const handleKeyDown = event => {
+      if (event.key === 'Escape') closeReadingMode()
+      if (event.key === 'ArrowLeft') moveReadingPassage(-1)
+      if (event.key === 'ArrowRight') moveReadingPassage(1)
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [readingPassageIndex])
+
+  const openReadingMode = index => {
+    setIsClosingReadingMode(false)
+    setReadingDirection('next')
+    setReadingPassageIndex(index)
+  }
+
+  const closeReadingMode = () => {
+    if (isClosingReadingMode) return
+    setIsClosingReadingMode(true)
+    window.setTimeout(() => {
+      setReadingPassageIndex(null)
+      setIsClosingReadingMode(false)
+    }, 220)
+  }
+
+  const moveReadingPassage = direction => {
+    if (readingPassageIndex === null) return
+
+    const nextIndex = readingPassageIndex + direction
+    if (nextIndex < 0 || nextIndex >= passages.length) {
+      closeReadingMode()
+      return
+    }
+
+    setReadingDirection(direction > 0 ? 'next' : 'previous')
+    setReadingPassageIndex(nextIndex)
+  }
+
+  const handleReadingTouchStart = event => {
+    setTouchStartX(event.touches[0].clientX)
+  }
+
+  const handleReadingTouchEnd = event => {
+    if (touchStartX === null) return
+
+    const distance = event.changedTouches[0].clientX - touchStartX
+    setTouchStartX(null)
+    if (Math.abs(distance) < 50) return
+    moveReadingPassage(distance < 0 ? 1 : -1)
+  }
+
   const toggleCompletion = async (passage, checked) => {
     if (!session) return
     const today = new Date().toISOString().slice(0, 10)
@@ -382,6 +439,67 @@ export default function App() {
       )
     }
 
+    if (readingPassageIndex !== null && passages[readingPassageIndex]) {
+      const readingPassage = passages[readingPassageIndex]
+      const isRead = todaysCompletions.includes(readingPassage.passage)
+
+      return (
+        <div
+          className={`reading-mode fixed inset-0 z-50 flex min-h-screen flex-col bg-[#fbfaf5] text-stone-800 ${isClosingReadingMode ? 'reading-mode-out' : ''}`}
+          onTouchStart={handleReadingTouchStart}
+          onTouchEnd={handleReadingTouchEnd}
+        >
+          <header className="flex items-start justify-between gap-4 border-b border-emerald-100 px-5 pb-4 pt-5 sm:px-8 sm:pt-7">
+            <div className="min-w-0">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">{readingPassage.label}</p>
+              <h1 className="truncate text-xl font-semibold tracking-tight text-emerald-950 sm:text-2xl">{readingPassage.passage}</h1>
+            </div>
+            <button
+              type="button"
+              onClick={closeReadingMode}
+              aria-label="Close reading mode"
+              className="shrink-0 rounded-full p-2 text-2xl leading-none text-stone-500 transition hover:bg-emerald-50 hover:text-emerald-900"
+            >
+              ×
+            </button>
+          </header>
+
+          <main key={`${readingPassage.key}-${readingDirection}`} className={`reading-page reading-page-${readingDirection} flex-1 overflow-y-auto px-5 py-8 sm:px-12 sm:py-12`}>
+            <article className="mx-auto max-w-2xl pb-8 text-[1.2rem] leading-[2] text-stone-700 sm:text-[1.35rem]">
+              {passageTexts[readingPassage.key] || 'Loading passage text...'}
+            </article>
+          </main>
+
+          <footer className="border-t border-emerald-100 bg-[#fbfaf5] px-5 pb-6 pt-4 sm:px-8">
+            <div className="mx-auto flex max-w-2xl flex-col items-center gap-4">
+              <button
+                type="button"
+                onClick={() => toggleCompletion(readingPassage.passage, !isRead)}
+                className={`w-full max-w-sm rounded-xl py-3 text-sm font-semibold transition sm:w-auto sm:min-w-52 ${
+                  isRead
+                    ? 'border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                    : 'bg-emerald-800 text-white shadow-sm hover:bg-emerald-900'
+                }`}
+              >
+                {isRead ? '✅ Read' : 'Mark as read'}
+              </button>
+              <div className="flex items-center gap-2" aria-label={`Passage ${readingPassageIndex + 1} of ${passages.length}`}>
+                {passages.map((passage, index) => (
+                  <button
+                    key={passage.key}
+                    type="button"
+                    aria-label={`Go to ${passage.label}`}
+                    onClick={() => openReadingMode(index)}
+                    className={`h-2 rounded-full transition-all ${index === readingPassageIndex ? 'w-6 bg-emerald-700' : 'w-2 bg-emerald-200 hover:bg-emerald-400'}`}
+                  />
+                ))}
+              </div>
+            </div>
+          </footer>
+        </div>
+      )
+    }
+
     return (
       <div className="min-h-screen bg-[#f8f6ef] px-3 py-4 sm:px-6 sm:py-8">
         <div className="mx-auto w-full max-w-2xl rounded-3xl border border-emerald-100 bg-white p-4 shadow-sm sm:p-8">
@@ -409,6 +527,7 @@ export default function App() {
                 {passages.map(({ key, label, passage }) => (
                   <div
                     key={key}
+                    onClick={() => openReadingMode(passages.findIndex(item => item.key === key))}
                     className="border border-stone-200 rounded-lg overflow-hidden"
                   >
                     <div className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left">
@@ -416,6 +535,7 @@ export default function App() {
                         <input
                           type="checkbox"
                           checked={todaysCompletions.includes(passage)}
+                          onClick={event => event.stopPropagation()}
                           onChange={e => toggleCompletion(passage, e.target.checked)}
                           className="h-4 w-4 shrink-0 accent-emerald-700"
                         />
@@ -425,17 +545,16 @@ export default function App() {
                         </div>
                       </div>
                       <button
-                        onClick={() => setExpandedPassage(expandedPassage === key ? null : key)}
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation()
+                          openReadingMode(passages.findIndex(item => item.key === key))
+                        }}
                         className="shrink-0 text-sm font-medium text-emerald-700 hover:text-emerald-900"
                       >
-                        {expandedPassage === key ? 'Close' : 'Open'}
+                        Read
                       </button>
                     </div>
-                    {expandedPassage === key && (
-                      <div className="px-3 py-2 border-t border-stone-200 text-sm text-stone-600 whitespace-pre-wrap">
-                        {passageTexts[key] || 'Loading…'}
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
