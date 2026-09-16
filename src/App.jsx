@@ -18,6 +18,8 @@ export default function App() {
   const [streak, setStreak] = useState(0)
   const [communityMembers, setCommunityMembers] = useState([])
   const [leaderboard, setLeaderboard] = useState([])
+  const [profileLoaded, setProfileLoaded] = useState(false)
+  const [profileUserId, setProfileUserId] = useState(null)
 
   const getSeasonalFruitEmoji = () => {
     const month = new Date().getMonth() + 1
@@ -34,14 +36,22 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!session) return
+    if (!session) {
+      return
+    }
+
     supabase
       .from('profiles')
       .select('display_name')
       .eq('id', session.user.id)
       .single()
-      .then(({ data }) => {
-        if (data?.display_name) setDisplayName(data.display_name)
+      .then(({ data, error }) => {
+        if (error && error.code !== 'PGRST116') {
+          console.error('Error fetching profile', error)
+        }
+        setDisplayName(data?.display_name || '')
+        setProfileUserId(session.user.id)
+        setProfileLoaded(true)
       })
   }, [session])
 
@@ -143,14 +153,6 @@ export default function App() {
       })
 
     setCommunityMembers(members)
-
-    const membersCompletedToday = members.filter(member => member.completedAll).length
-    const percentCompleted = members.length === 0 ? 0 : Math.round((membersCompletedToday / members.length) * 100)
-    const summary = `${percentCompleted}% of the congregation has read today`
-    setCommunityMembers(prev => {
-      const nextMembers = members.map(member => ({ ...member, summary }))
-      return nextMembers
-    })
 
     const leaderboardData = (Array.isArray(profileRows) ? profileRows : [])
       .map(profile => {
@@ -280,11 +282,18 @@ export default function App() {
   }
 
   async function handleSaveName() {
+    const trimmedName = displayName.trim()
+    if (!trimmedName) {
+      setMessage('Please enter a name for your profile.')
+      return
+    }
+
     setLoading(true)
     const { error } = await supabase.from('profiles').upsert({
       id: session.user.id,
-      display_name: displayName,
+      display_name: trimmedName,
     })
+    if (!error) setDisplayName(trimmedName)
     setMessage(error ? error.message : 'Name saved!')
     setLoading(false)
   }
@@ -326,11 +335,66 @@ export default function App() {
   }
 
   if (session) {
+    if (!profileLoaded || profileUserId !== session.user.id) {
+      return (
+        <div className="min-h-screen bg-[#f8f6ef] flex items-center justify-center p-4">
+          <div className="text-center text-emerald-900">
+            <p className="text-sm font-medium">Preparing your orchard...</p>
+          </div>
+        </div>
+      )
+    }
+
+    if (!displayName.trim()) {
+      return (
+        <div className="min-h-screen bg-[#f8f6ef] flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-3xl border border-emerald-100 bg-white p-6 shadow-sm sm:p-8">
+            <div className="mb-6 text-center">
+              <h1 className="text-2xl font-semibold tracking-tight text-emerald-950">Welcome to Orchard Bible</h1>
+              <p className="mt-2 text-sm leading-6 text-stone-600">What should we call you?</p>
+            </div>
+            <label className="mb-1 block text-xs font-medium text-stone-600" htmlFor="welcome-name">Your display name</label>
+            <input
+              id="welcome-name"
+              className="mb-3 w-full rounded-xl border border-emerald-100 bg-emerald-50/30 px-3 py-3 text-base text-stone-800 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+              type="text"
+              placeholder="e.g. Pastor James"
+              value={displayName}
+              onChange={e => setDisplayName(e.target.value)}
+              autoFocus
+            />
+            <button
+              onClick={handleSaveName}
+              disabled={loading}
+              className="w-full rounded-xl bg-emerald-800 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-900 disabled:opacity-50"
+            >
+              Continue to today’s reading
+            </button>
+            <button
+              onClick={handleSignOut}
+              className="mt-3 w-full py-2 text-sm text-stone-500 transition hover:text-emerald-800"
+            >
+              Sign out
+            </button>
+            {message && <p className="mt-4 text-center text-sm text-stone-500">{message}</p>}
+          </div>
+        </div>
+      )
+    }
+
     return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-8 w-full max-w-sm">
-          <h1 className="text-xl font-semibold text-stone-800 mb-1">Orchard Bible</h1>
-          <p className="text-sm text-stone-500 mb-6">{displayName || session.user.email}</p>
+      <div className="min-h-screen bg-[#f8f6ef] px-3 py-4 sm:px-6 sm:py-8">
+        <div className="mx-auto w-full max-w-2xl rounded-3xl border border-emerald-100 bg-white p-4 shadow-sm sm:p-8">
+          <div className="relative mb-6 flex flex-col items-center border-b border-emerald-100 pb-5">
+            <div className="w-full min-w-0 text-center">
+              <img
+                src="/logo.png"
+                alt="Orchard logo"
+                className="mx-auto mb-3 h-20 w-auto object-contain"
+              />
+              <p className="mt-1 truncate text-sm text-stone-500">{displayName}</p>
+            </div>
+          </div>
 
           {todaysReading && (
             <div className="mb-6">
@@ -347,22 +411,22 @@ export default function App() {
                     key={key}
                     className="border border-stone-200 rounded-lg overflow-hidden"
                   >
-                    <div className="flex items-center justify-between w-full px-3 py-2 text-left">
-                      <div className="flex items-center gap-3">
+                    <div className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left">
+                      <div className="flex min-w-0 items-center gap-3">
                         <input
                           type="checkbox"
                           checked={todaysCompletions.includes(passage)}
                           onChange={e => toggleCompletion(passage, e.target.checked)}
-                          className="w-4 h-4"
+                          className="h-4 w-4 shrink-0 accent-emerald-700"
                         />
-                        <div>
+                        <div className="min-w-0">
                           <div className="text-xs text-stone-400">{label}</div>
-                          <div className="text-sm text-stone-700 font-medium truncate">{passage}</div>
+                          <div className="truncate text-sm font-medium text-stone-700">{passage}</div>
                         </div>
                       </div>
                       <button
                         onClick={() => setExpandedPassage(expandedPassage === key ? null : key)}
-                        className="text-sm text-stone-400"
+                        className="shrink-0 text-sm font-medium text-emerald-700 hover:text-emerald-900"
                       >
                         {expandedPassage === key ? 'Close' : 'Open'}
                       </button>
@@ -446,9 +510,9 @@ export default function App() {
             </div>
           </div>
 
-          <label className="text-xs text-stone-500 mb-1 block">Your display name</label>
+          <label className="mb-1 block text-xs text-stone-500">Your display name</label>
           <input
-            className="w-full border border-stone-200 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:ring-2 focus:ring-stone-300"
+            className="mb-3 w-full rounded-xl border border-emerald-100 bg-emerald-50/30 px-3 py-2 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
             type="text"
             placeholder="e.g. Pastor James"
             value={displayName}
@@ -457,13 +521,13 @@ export default function App() {
           <button
             onClick={handleSaveName}
             disabled={loading}
-            className="w-full bg-stone-800 text-white text-sm rounded-lg py-2 hover:bg-stone-700 mb-3 disabled:opacity-50"
+            className="mb-3 w-full rounded-xl bg-emerald-800 py-2 text-sm font-semibold text-white hover:bg-emerald-900 disabled:opacity-50"
           >
             Save name
           </button>
           <button
             onClick={handleSignOut}
-            className="w-full border border-stone-200 text-stone-500 text-sm rounded-lg py-2 hover:bg-stone-50"
+            className="w-full rounded-xl border border-emerald-100 py-2 text-sm text-stone-500 hover:bg-emerald-50"
           >
             Sign out
           </button>
@@ -475,20 +539,26 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50 flex items-center justify-center">
-      <div className="bg-white rounded-2xl shadow-sm border border-stone-200 p-8 w-full max-w-sm">
-        <h1 className="text-xl font-semibold text-stone-800 mb-1">Orchard Bible</h1>
-        <p className="text-sm text-stone-500 mb-6">Sign in to track your reading</p>
+    <div className="min-h-screen bg-[#f8f6ef] flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-3xl border border-emerald-100 bg-white p-6 shadow-sm sm:p-8">
+        <div className="mb-6 text-center">
+          <img
+            src="/logo.png"
+            alt="Orchard logo"
+            className="mx-auto mb-3 h-20 w-auto object-contain"
+          />
+          <p className="mt-2 text-sm text-stone-500">Sign in to track your reading</p>
+        </div>
 
         <input
-          className="w-full border border-stone-200 rounded-lg px-3 py-2 text-sm mb-3 outline-none focus:ring-2 focus:ring-stone-300"
+          className="mb-3 w-full rounded-xl border border-emerald-100 bg-emerald-50/30 px-3 py-3 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
           type="email"
           placeholder="Email"
           value={email}
           onChange={e => setEmail(e.target.value)}
         />
         <input
-          className="w-full border border-stone-200 rounded-lg px-3 py-2 text-sm mb-4 outline-none focus:ring-2 focus:ring-stone-300"
+          className="mb-4 w-full rounded-xl border border-emerald-100 bg-emerald-50/30 px-3 py-3 text-sm outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
           type="password"
           placeholder="Password"
           value={password}
@@ -499,14 +569,14 @@ export default function App() {
           <button
             onClick={handleLogin}
             disabled={loading}
-            className="flex-1 bg-stone-800 text-white text-sm rounded-lg py-2 hover:bg-stone-700 disabled:opacity-50"
+            className="flex-1 rounded-xl bg-emerald-800 py-3 text-sm font-semibold text-white hover:bg-emerald-900 disabled:opacity-50"
           >
             Sign in
           </button>
           <button
             onClick={handleSignUp}
             disabled={loading}
-            className="flex-1 border border-stone-200 text-stone-700 text-sm rounded-lg py-2 hover:bg-stone-50 disabled:opacity-50"
+            className="flex-1 rounded-xl border border-emerald-200 py-3 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
           >
             Sign up
           </button>
