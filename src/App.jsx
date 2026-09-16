@@ -326,9 +326,21 @@ export default function App() {
   }, [readingPassageIndex])
 
   const openReadingMode = index => {
+    if (!passages[index]) return
     setIsClosingReadingMode(false)
     setReadingDirection('next')
     setReadingPassageIndex(index)
+  }
+
+  const handlePassageCardClick = index => {
+    openReadingMode(index)
+  }
+
+  const handlePassageCardKeyDown = (event, index) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      handlePassageCardClick(index)
+    }
   }
 
   const closeReadingMode = () => {
@@ -524,11 +536,14 @@ export default function App() {
               </div>
               <p className="text-xs text-stone-500 mb-2">{todaysCompletions.length} of 4 read today</p>
               <div className="space-y-2">
-                {passages.map(({ key, label, passage }) => (
+                {passages.map(({ key, label, passage }, index) => (
                   <div
                     key={key}
-                    onClick={() => openReadingMode(passages.findIndex(item => item.key === key))}
-                    className="border border-stone-200 rounded-lg overflow-hidden"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handlePassageCardClick(index)}
+                    onKeyDown={event => handlePassageCardKeyDown(event, index)}
+                    className="cursor-pointer border border-stone-200 rounded-lg overflow-hidden"
                   >
                     <div className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left">
                       <div className="flex min-w-0 items-center gap-3">
@@ -548,7 +563,7 @@ export default function App() {
                         type="button"
                         onClick={event => {
                           event.stopPropagation()
-                          openReadingMode(passages.findIndex(item => item.key === key))
+                          handlePassageCardClick(index)
                         }}
                         className="shrink-0 text-sm font-medium text-emerald-700 hover:text-emerald-900"
                       >
