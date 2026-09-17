@@ -78,8 +78,8 @@ export default function App() {
       const params = new URLSearchParams({
         q: passage,
         'include-footnotes': 'false',
-        'include-headings': 'false',
-        'include-verse-numbers': 'true',
+        'include-headings': 'true',
+        'include-verse-numbers': 'false',
       })
 
       fetch(`https://api.esv.org/v3/passage/text/?${params}`, {
