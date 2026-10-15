@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from './supabaseClient'
 import mcheyneData from './data/mcheyne.json'
 
 const ESV_API_KEY = import.meta.env.VITE_ESV_API_KEY
+const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY
+const ELEVENLABS_VOICE_ID = 'auq43ws1oslv0tO4BDa7'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -17,6 +19,12 @@ export default function App() {
   const [readingDirection, setReadingDirection] = useState('next')
   const [touchStartX, setTouchStartX] = useState(null)
   const [isClosingReadingMode, setIsClosingReadingMode] = useState(false)
+  const [isAudioLoading, setIsAudioLoading] = useState(false)
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false)
+  const [audioError, setAudioError] = useState('')
+  const audioRef = useRef(null)
+  const audioUrlRef = useRef(null)
+  const audioRequestRef = useRef(null)
   const [todaysCompletions, setTodaysCompletions] = useState([])
   const [streak, setStreak] = useState(0)
   const [communityMembers, setCommunityMembers] = useState([])
@@ -325,8 +333,28 @@ export default function App() {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [readingPassageIndex])
 
+  useEffect(() => {
+    return () => {
+      audioRequestRef.current?.abort()
+      audioRequestRef.current = null
+      audioRef.current?.pause()
+      audioRef.current = null
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current)
+        audioUrlRef.current = null
+      }
+    }
+  }, [readingPassageIndex])
+
   const openReadingMode = index => {
     if (!passages[index]) return
+    audioRequestRef.current?.abort()
+    audioRequestRef.current = null
+    audioRef.current?.pause()
+    if (audioRef.current) audioRef.current.currentTime = 0
+    setIsAudioLoading(false)
+    setIsAudioPlaying(false)
+    setAudioError('')
     setIsClosingReadingMode(false)
     setReadingDirection('next')
     setReadingPassageIndex(index)
@@ -345,6 +373,13 @@ export default function App() {
 
   const closeReadingMode = () => {
     if (isClosingReadingMode) return
+    audioRequestRef.current?.abort()
+    audioRequestRef.current = null
+    audioRef.current?.pause()
+    if (audioRef.current) audioRef.current.currentTime = 0
+    setIsAudioLoading(false)
+    setIsAudioPlaying(false)
+    setAudioError('')
     setIsClosingReadingMode(true)
     window.setTimeout(() => {
       setReadingPassageIndex(null)
@@ -354,6 +389,13 @@ export default function App() {
 
   const moveReadingPassage = direction => {
     if (readingPassageIndex === null) return
+    audioRequestRef.current?.abort()
+    audioRequestRef.current = null
+    audioRef.current?.pause()
+    if (audioRef.current) audioRef.current.currentTime = 0
+    setIsAudioLoading(false)
+    setIsAudioPlaying(false)
+    setAudioError('')
 
     const nextIndex = readingPassageIndex + direction
     if (nextIndex < 0 || nextIndex >= passages.length) {
@@ -363,6 +405,94 @@ export default function App() {
 
     setReadingDirection(direction > 0 ? 'next' : 'previous')
     setReadingPassageIndex(nextIndex)
+  }
+
+  const handleAudioPlaybackError = error => {
+    console.error('Error playing passage audio', error)
+    setAudioError('Unable to play audio. Please try again.')
+    setIsAudioPlaying(false)
+  }
+
+  const playPassageAudio = async audio => {
+    audio.currentTime = 0
+    setAudioError('')
+    setIsAudioPlaying(true)
+
+    try {
+      await audio.play()
+    } catch (error) {
+      if (audioRef.current === audio) handleAudioPlaybackError(error)
+    }
+  }
+
+  const handleAudioButtonClick = async () => {
+    if (isAudioPlaying) {
+      audioRef.current?.pause()
+      if (audioRef.current) audioRef.current.currentTime = 0
+      setIsAudioPlaying(false)
+      return
+    }
+
+    if (audioRef.current) {
+      await playPassageAudio(audioRef.current)
+      return
+    }
+
+    if (!ELEVENLABS_API_KEY) {
+      setAudioError('Add VITE_ELEVENLABS_API_KEY to your .env file to enable audio.')
+      return
+    }
+
+    const passageText = passageTexts[passages[readingPassageIndex]?.key]
+    if (!passageText) return
+
+    const controller = new AbortController()
+    audioRequestRef.current = controller
+    setAudioError('')
+    setIsAudioLoading(true)
+
+    try {
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: passageText,
+          model_id: 'eleven_monolingual_v1',
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`ElevenLabs request failed with status ${response.status}`)
+      }
+
+      const audioUrl = URL.createObjectURL(await response.blob())
+      if (controller.signal.aborted) {
+        URL.revokeObjectURL(audioUrl)
+        return
+      }
+
+      audioUrlRef.current = audioUrl
+      const audio = new Audio(audioUrl)
+      audio.onended = () => setIsAudioPlaying(false)
+      audio.onerror = () => handleAudioPlaybackError(new Error('The audio could not be decoded.'))
+      audioRef.current = audio
+      await playPassageAudio(audio)
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        console.error('Error loading passage audio', error)
+        setAudioError('Unable to load audio. Please try again.')
+      }
+    } finally {
+      if (audioRequestRef.current === controller) {
+        audioRequestRef.current = null
+        setIsAudioLoading(false)
+      }
+    }
   }
 
   const handleReadingTouchStart = event => {
@@ -453,6 +583,7 @@ export default function App() {
 
     if (readingPassageIndex !== null && passages[readingPassageIndex]) {
       const readingPassage = passages[readingPassageIndex]
+      const passageText = passageTexts[readingPassage.key]
       const isRead = todaysCompletions.includes(readingPassage.passage)
 
       return (
@@ -477,8 +608,25 @@ export default function App() {
           </header>
 
           <main key={`${readingPassage.key}-${readingDirection}`} className={`reading-page reading-page-${readingDirection} flex-1 overflow-y-auto px-5 py-8 sm:px-12 sm:py-12`}>
+            <div className="mx-auto mb-6 flex max-w-2xl flex-col items-start gap-2">
+              <button
+                type="button"
+                onClick={handleAudioButtonClick}
+                disabled={isAudioLoading || !passageText}
+                aria-label={isAudioPlaying ? 'Pause passage audio' : 'Play passage audio'}
+                className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isAudioLoading ? (
+                  <>
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-700/30 border-t-emerald-700" aria-hidden="true" />
+                    Loading audio...
+                  </>
+                ) : isAudioPlaying ? '⏸ Pause' : '▶️ Play'}
+              </button>
+              {audioError && <p role="alert" className="text-sm text-red-700">{audioError}</p>}
+            </div>
             <article className="mx-auto max-w-2xl pb-8 text-[1.2rem] leading-[2] text-stone-700 sm:text-[1.35rem]">
-              {passageTexts[readingPassage.key] || 'Loading passage text...'}
+              {passageText || 'Loading passage text...'}
             </article>
           </main>
 
