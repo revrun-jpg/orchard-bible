@@ -4,7 +4,25 @@ import mcheyneData from './data/mcheyne.json'
 
 const ESV_API_KEY = import.meta.env.VITE_ESV_API_KEY
 const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY
-const ELEVENLABS_VOICE_ID = 'auq43ws1oslv0tO4BDa7'
+const ELEVENLABS_VOICES = [
+  { id: 'auq43ws1oslv0tO4BDa7', name: 'Adam Stone' },
+  { id: 'TYKLc7ViOIGE13dSZYlK', name: 'Noah' },
+  { id: 'GoGUcAZovo4MFeLxJdZd', name: 'Eve' },
+  { id: 'G4Wh6MqJNTzYtuAeMqv5', name: 'Rachel' },
+]
+const VOICE_PREFERENCE_KEY = 'orchard-bible-elevenlabs-voice'
+
+const getSavedVoiceId = () => {
+  try {
+    const savedVoiceId = window.localStorage.getItem(VOICE_PREFERENCE_KEY)
+    return ELEVENLABS_VOICES.some(voice => voice.id === savedVoiceId)
+      ? savedVoiceId
+      : ELEVENLABS_VOICES[0].id
+  } catch (error) {
+    console.error('Unable to read saved narration voice', error)
+    return ELEVENLABS_VOICES[0].id
+  }
+}
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -22,6 +40,7 @@ export default function App() {
   const [isAudioLoading, setIsAudioLoading] = useState(false)
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
   const [audioError, setAudioError] = useState('')
+  const [selectedVoiceId, setSelectedVoiceId] = useState(getSavedVoiceId)
   const audioRef = useRef(null)
   const audioUrlRef = useRef(null)
   const audioRequestRef = useRef(null)
@@ -425,6 +444,30 @@ export default function App() {
     }
   }
 
+  const handleVoiceChange = voiceId => {
+    if (voiceId === selectedVoiceId) return
+
+    audioRequestRef.current?.abort()
+    audioRequestRef.current = null
+    audioRef.current?.pause()
+    audioRef.current = null
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current)
+      audioUrlRef.current = null
+    }
+
+    setIsAudioLoading(false)
+    setIsAudioPlaying(false)
+    setAudioError('')
+    setSelectedVoiceId(voiceId)
+    try {
+      window.localStorage.setItem(VOICE_PREFERENCE_KEY, voiceId)
+    } catch (error) {
+      console.error('Unable to save narration voice preference', error)
+      setAudioError('Unable to save your voice preference on this device.')
+    }
+  }
+
   const handleAudioButtonClick = async () => {
     if (isAudioPlaying) {
       audioRef.current?.pause()
@@ -452,7 +495,7 @@ export default function App() {
     setIsAudioLoading(true)
 
     try {
-      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`, {
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${selectedVoiceId}`, {
         method: 'POST',
         headers: {
           'xi-api-key': ELEVENLABS_API_KEY,
@@ -608,7 +651,24 @@ export default function App() {
           </header>
 
           <main key={`${readingPassage.key}-${readingDirection}`} className={`reading-page reading-page-${readingDirection} flex-1 overflow-y-auto px-5 py-8 sm:px-12 sm:py-12`}>
-            <div className="mx-auto mb-6 flex max-w-2xl flex-col items-start gap-2">
+            <div className="mx-auto mb-6 flex max-w-2xl flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Narration voice">
+                {ELEVENLABS_VOICES.map(voice => (
+                  <button
+                    key={voice.id}
+                    type="button"
+                    onClick={() => handleVoiceChange(voice.id)}
+                    aria-pressed={selectedVoiceId === voice.id}
+                    className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
+                      selectedVoiceId === voice.id
+                        ? 'border-emerald-800 bg-emerald-800 text-white'
+                        : 'border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-50'
+                    }`}
+                  >
+                    {voice.name}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
                 onClick={handleAudioButtonClick}
@@ -619,7 +679,7 @@ export default function App() {
                 {isAudioLoading ? (
                   <>
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-700/30 border-t-emerald-700" aria-hidden="true" />
-                    Loading audio...
+                    Loading...
                   </>
                 ) : isAudioPlaying ? '⏸ Pause' : '▶️ Play'}
               </button>
