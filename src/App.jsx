@@ -3,14 +3,18 @@ import { supabase } from './supabaseClient'
 import mcheyneData from './data/mcheyne.json'
 
 const ESV_API_KEY = import.meta.env.VITE_ESV_API_KEY
-const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY
 const ELEVENLABS_VOICES = [
   { id: 'auq43ws1oslv0tO4BDa7', name: 'Adam Stone' },
-  { id: 'TYKLc7ViOIGE13dSZYlK', name: 'Noah' },
-  { id: 'GoGUcAZovo4MFeLxJdZd', name: 'Eve' },
+  { id: 'GoGUcAZovo4MFeLxJdZd', name: 'Noah' },
+  { id: 'TYKLc7ViOIGE13dSZYlK', name: 'Eve' },
   { id: 'G4Wh6MqJNTzYtuAeMqv5', name: 'Rachel' },
 ]
+const ELEVENLABS_MODELS = [
+  { id: 'eleven_multilingual_v2', name: 'Multilingual v2 (standard)' },
+  { id: 'eleven_flash_v2_5', name: 'Flash v2.5 (faster)' },
+]
 const VOICE_PREFERENCE_KEY = 'orchard-bible-elevenlabs-voice'
+const MODEL_PREFERENCE_KEY = 'orchard-bible-elevenlabs-model'
 
 const getSavedVoiceId = () => {
   try {
@@ -21,6 +25,18 @@ const getSavedVoiceId = () => {
   } catch (error) {
     console.error('Unable to read saved narration voice', error)
     return ELEVENLABS_VOICES[0].id
+  }
+}
+
+const getSavedModelId = () => {
+  try {
+    const savedModelId = window.localStorage.getItem(MODEL_PREFERENCE_KEY)
+    return ELEVENLABS_MODELS.some(model => model.id === savedModelId)
+      ? savedModelId
+      : ELEVENLABS_MODELS[0].id
+  } catch (error) {
+    console.error('Unable to read saved narration model', error)
+    return ELEVENLABS_MODELS[0].id
   }
 }
 
@@ -41,6 +57,7 @@ export default function App() {
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
   const [audioError, setAudioError] = useState('')
   const [selectedVoiceId, setSelectedVoiceId] = useState(getSavedVoiceId)
+  const [selectedModelId, setSelectedModelId] = useState(getSavedModelId)
   const audioRef = useRef(null)
   const audioUrlRef = useRef(null)
   const audioRequestRef = useRef(null)
@@ -426,6 +443,16 @@ export default function App() {
     setReadingPassageIndex(nextIndex)
   }
 
+  const autoAdvanceToNextPassage = () => {
+    if (readingPassageIndex === null) return
+    if (readingPassageIndex >= passages.length - 1) {
+      closeReadingMode()
+      return
+    }
+
+    moveReadingPassage(1)
+  }
+
   const handleAudioPlaybackError = error => {
     console.error('Error playing passage audio', error)
     setAudioError('Unable to play audio. Please try again.')
@@ -468,6 +495,30 @@ export default function App() {
     }
   }
 
+  const handleModelChange = modelId => {
+    if (modelId === selectedModelId) return
+
+    audioRequestRef.current?.abort()
+    audioRequestRef.current = null
+    audioRef.current?.pause()
+    audioRef.current = null
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current)
+      audioUrlRef.current = null
+    }
+
+    setIsAudioLoading(false)
+    setIsAudioPlaying(false)
+    setAudioError('')
+    setSelectedModelId(modelId)
+    try {
+      window.localStorage.setItem(MODEL_PREFERENCE_KEY, modelId)
+    } catch (error) {
+      console.error('Unable to save narration model preference', error)
+      setAudioError('Unable to save your narration model preference on this device.')
+    }
+  }
+
   const handleAudioButtonClick = async () => {
     if (isAudioPlaying) {
       audioRef.current?.pause()
@@ -481,11 +532,6 @@ export default function App() {
       return
     }
 
-    if (!ELEVENLABS_API_KEY) {
-      setAudioError('Add VITE_ELEVENLABS_API_KEY to your .env file to enable audio.')
-      return
-    }
-
     const passageText = passageTexts[passages[readingPassageIndex]?.key]
     if (!passageText) return
 
@@ -494,23 +540,25 @@ export default function App() {
     setAudioError('')
     setIsAudioLoading(true)
 
+    let responseStatus = null
+
     try {
-      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${selectedVoiceId}`, {
+      const response = await fetch('/api/tts', {
         method: 'POST',
-        headers: {
-          'xi-api-key': ELEVENLABS_API_KEY,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: passageText,
-          model_id: 'eleven_monolingual_v1',
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+          voiceId: selectedVoiceId,
+          modelId: selectedModelId,
         }),
         signal: controller.signal,
       })
 
+      responseStatus = response.status
+
       if (!response.ok) {
-        throw new Error(`ElevenLabs request failed with status ${response.status}`)
+        const responseBody = await response.text()
+        throw new Error(`Audio request failed with status ${response.status}: ${responseBody}`)
       }
 
       const audioUrl = URL.createObjectURL(await response.blob())
@@ -521,13 +569,19 @@ export default function App() {
 
       audioUrlRef.current = audioUrl
       const audio = new Audio(audioUrl)
-      audio.onended = () => setIsAudioPlaying(false)
+      audio.onended = () => {
+        setIsAudioPlaying(false)
+        autoAdvanceToNextPassage()
+      }
       audio.onerror = () => handleAudioPlaybackError(new Error('The audio could not be decoded.'))
       audioRef.current = audio
       await playPassageAudio(audio)
     } catch (error) {
       if (!controller.signal.aborted) {
-        console.error('Error loading passage audio', error)
+        console.error('Error loading passage audio', {
+          statusCode: responseStatus,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        })
         setAudioError('Unable to load audio. Please try again.')
       }
     } finally {
@@ -669,6 +723,19 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              <label className="flex items-center gap-2 text-xs font-semibold text-emerald-900">
+                Model
+                <select
+                  value={selectedModelId}
+                  onChange={event => handleModelChange(event.target.value)}
+                  aria-label="Narration model"
+                  className="max-w-full rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                >
+                  {ELEVENLABS_MODELS.map(model => (
+                    <option key={model.id} value={model.id}>{model.name}</option>
+                  ))}
+                </select>
+              </label>
               <button
                 type="button"
                 onClick={handleAudioButtonClick}
