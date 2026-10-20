@@ -12,7 +12,52 @@ const ALLOWED_MODELS = new Set([
   'eleven_multilingual_v2',
   'eleven_flash_v2_5',
 ])
-const MAX_TEXT_LENGTH = 5000
+const MAX_CHUNK_LENGTH = 5000
+const MAX_TEXT_LENGTH = 20000
+
+function splitTextIntoChunks(text) {
+  const chunks = []
+  let remaining = text.trim()
+
+  while (remaining.length > MAX_CHUNK_LENGTH) {
+    const lastAllowedIndex = MAX_CHUNK_LENGTH - 1
+    const searchFrom = remaining.lastIndexOf(' ', lastAllowedIndex)
+    const sentenceBreaks = [
+      remaining.lastIndexOf('. ', lastAllowedIndex),
+      remaining.lastIndexOf('? ', lastAllowedIndex),
+      remaining.lastIndexOf('! ', lastAllowedIndex),
+      remaining.lastIndexOf('\n', lastAllowedIndex),
+    ]
+    const sentenceBreak = Math.max(...sentenceBreaks)
+    const splitAt = sentenceBreak >= MAX_CHUNK_LENGTH * 0.75
+      ? sentenceBreak + 1
+      : searchFrom > 0
+        ? searchFrom
+        : MAX_CHUNK_LENGTH
+
+    chunks.push(remaining.slice(0, splitAt).trim())
+    remaining = remaining.slice(splitAt).trim()
+  }
+
+  if (remaining) chunks.push(remaining)
+  return chunks
+}
+
+function requestAudioChunk(text, voiceId, modelId, apiKey) {
+  return fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+    method: 'POST',
+    headers: {
+      'xi-api-key': apiKey,
+      'Content-Type': 'application/json',
+      Accept: 'audio/mpeg',
+    },
+    body: JSON.stringify({
+      text,
+      model_id: modelId,
+      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+    }),
+  })
+}
 
 function sendJson(res, statusCode, body) {
   res.statusCode = statusCode
@@ -43,45 +88,43 @@ export default async function handler(req, res) {
     return sendJson(res, 500, { error: 'Audio service is not configured.' })
   }
 
-  let elevenLabsResponse
+  const textChunks = splitTextIntoChunks(text)
+  let firstResponse
   try {
-    elevenLabsResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-      {
-        method: 'POST',
-        headers: {
-          'xi-api-key': apiKey,
-          'Content-Type': 'application/json',
-          Accept: 'audio/mpeg',
-        },
-        body: JSON.stringify({
-          text,
-          model_id: modelId,
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-        }),
-      },
-    )
+    firstResponse = await requestAudioChunk(textChunks[0], voiceId, modelId, apiKey)
   } catch (error) {
     console.error('Unable to reach ElevenLabs.', error)
     return sendJson(res, 502, { error: 'Unable to reach the audio service.' })
   }
 
-  if (!elevenLabsResponse.ok) {
-    console.error(`ElevenLabs returned status ${elevenLabsResponse.status}.`)
-    return sendJson(res, elevenLabsResponse.status, { error: 'Audio generation failed.' })
+  if (!firstResponse.ok) {
+    console.error(`ElevenLabs returned status ${firstResponse.status}.`)
+    return sendJson(res, firstResponse.status, { error: 'Audio generation failed.' })
   }
 
-  if (!elevenLabsResponse.body) {
+  if (!firstResponse.body) {
     console.error('ElevenLabs returned an empty audio response.')
     return sendJson(res, 502, { error: 'Audio generation returned no audio.' })
   }
 
-  res.setHeader('Content-Type', elevenLabsResponse.headers.get('content-type') || 'audio/mpeg')
+  res.setHeader('Content-Type', firstResponse.headers.get('content-type') || 'audio/mpeg')
   res.setHeader('Cache-Control', 'no-store')
   res.statusCode = 200
 
   try {
-    await pipeline(Readable.fromWeb(elevenLabsResponse.body), res)
+    async function* streamAudio() {
+      yield* Readable.fromWeb(firstResponse.body)
+      for (const textChunk of textChunks.slice(1)) {
+        const response = await requestAudioChunk(textChunk, voiceId, modelId, apiKey)
+        if (!response.ok || !response.body) {
+          console.error(`ElevenLabs returned status ${response.status} for a subsequent audio chunk.`)
+          throw new Error('Audio generation failed for a subsequent chunk.')
+        }
+        yield* Readable.fromWeb(response.body)
+      }
+    }
+
+    await pipeline(Readable.from(streamAudio()), res)
   } catch (error) {
     console.error('Unable to stream audio to the client.', error)
     if (!res.headersSent) {
