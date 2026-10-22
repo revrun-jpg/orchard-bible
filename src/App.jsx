@@ -15,6 +15,35 @@ const ELEVENLABS_MODELS = [
 ]
 const VOICE_PREFERENCE_KEY = 'orchard-bible-elevenlabs-voice'
 const MODEL_PREFERENCE_KEY = 'orchard-bible-elevenlabs-model'
+const EMPTY_COMPLETIONS = []
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+]
+
+const getDateKey = date => [
+  date.getFullYear(),
+  String(date.getMonth() + 1).padStart(2, '0'),
+  String(date.getDate()).padStart(2, '0'),
+].join('-')
+
+const getReadingForDate = date => {
+  const dateLabel = `${MONTH_NAMES[date.getMonth()]} ${date.getDate()}`
+  const reading = mcheyneData.data.find(entry => entry.date === dateLabel)
+
+  if (reading || date.getMonth() !== 1 || date.getDate() !== 29) {
+    return reading
+  }
+
+  // The plan has 365 entries, so February 29 follows the February 28 reading.
+  return mcheyneData.data.find(entry => entry.date === 'February 28')
+}
+
+const queryReadingCompletions = (userId, dateKey) => supabase
+  .from('completions')
+  .select('passage')
+  .eq('user_id', userId)
+  .eq('reading_date', dateKey)
 
 const getSavedVoiceId = () => {
   try {
@@ -47,8 +76,9 @@ export default function App() {
   const [displayName, setDisplayName] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
-  const [todaysReading, setTodaysReading] = useState(null)
-  const [passageTexts, setPassageTexts] = useState({})
+  const [selectedReadingDate, setSelectedReadingDate] = useState(() => getDateKey(new Date()))
+  const [completionsByDate, setCompletionsByDate] = useState({})
+  const [passageTextsByDate, setPassageTextsByDate] = useState({})
   const [readingPassageIndex, setReadingPassageIndex] = useState(null)
   const [readingDirection, setReadingDirection] = useState('next')
   const [touchStartX, setTouchStartX] = useState(null)
@@ -58,10 +88,12 @@ export default function App() {
   const [audioError, setAudioError] = useState('')
   const [selectedVoiceId, setSelectedVoiceId] = useState(getSavedVoiceId)
   const [selectedModelId, setSelectedModelId] = useState(getSavedModelId)
-  const audioRef = useRef(null)
-  const audioUrlRef = useRef(null)
+  const audioContextRef = useRef(null)
+  const audioBufferRef = useRef(null)
+  const audioSourceRef = useRef(null)
+  const audioStartTimeRef = useRef(0)
+  const audioOffsetRef = useRef(0)
   const audioRequestRef = useRef(null)
-  const [todaysCompletions, setTodaysCompletions] = useState([])
   const [streak, setStreak] = useState(0)
   const [communityMembers, setCommunityMembers] = useState([])
   const [leaderboard, setLeaderboard] = useState([])
@@ -102,21 +134,26 @@ export default function App() {
       })
   }, [session])
 
-  useEffect(() => {
-    const now = new Date()
-    const monthNames = ['January','February','March','April','May','June',
-      'July','August','September','October','November','December']
-    const todayStr = `${monthNames[now.getMonth()]} ${now.getDate()}`
-    const entry = mcheyneData.data.find(d => d.date === todayStr)
-    setTodaysReading(entry)
-  }, [])
+  const selectedDate = new Date(
+    Number(selectedReadingDate.slice(0, 4)),
+    Number(selectedReadingDate.slice(5, 7)) - 1,
+    Number(selectedReadingDate.slice(8, 10)),
+  )
+  const todayDateKey = getDateKey(new Date())
+  const isToday = selectedReadingDate === todayDateKey
+  const selectedReading = getReadingForDate(selectedDate)
+  const passageTexts = passageTextsByDate[selectedReadingDate] || {}
+  const readingCompletions = session
+    ? completionsByDate[`${session.user.id}:${selectedReadingDate}`] || EMPTY_COMPLETIONS
+    : EMPTY_COMPLETIONS
 
   useEffect(() => {
-    if (!todaysReading) return
+    if (!selectedReading) return
 
+    let isCurrent = true
     const keys = ['family1', 'family2', 'secret1', 'secret2']
     keys.forEach(key => {
-      const passage = todaysReading[key]
+      const passage = selectedReading[key]
       if (!passage) return
 
       const params = new URLSearchParams({
@@ -131,26 +168,34 @@ export default function App() {
       })
         .then(res => res.json())
         .then(data => {
-          setPassageTexts(prev => ({ ...prev, [key]: data.passages?.[0] || '' }))
+          if (isCurrent) {
+            setPassageTextsByDate(prev => ({
+              ...prev,
+              [selectedReadingDate]: {
+                ...(prev[selectedReadingDate] || {}),
+                [key]: data.passages?.[0] || '',
+              },
+            }))
+          }
         })
     })
-  }, [todaysReading])
+    return () => {
+      isCurrent = false
+    }
+  }, [selectedReading, selectedReadingDate])
 
-  // Fetch today's completions for current user
-  const fetchTodaysCompletions = async () => {
-    if (!session || !todaysReading) return
-    const today = new Date().toISOString().slice(0, 10)
-    const { data, error } = await supabase
-      .from('completions')
-      .select('passage')
-      .eq('user_id', session.user.id)
-      .eq('reading_date', today)
+  const fetchReadingCompletions = async (dateKey = selectedReadingDate) => {
+    if (!session) return
+    const { data, error } = await queryReadingCompletions(session.user.id, dateKey)
 
     if (error) {
       console.error('Error fetching completions', error)
       return
     }
-    setTodaysCompletions(data?.map(d => d.passage) || [])
+    setCompletionsByDate(prev => ({
+      ...prev,
+      [`${session.user.id}:${dateKey}`]: data?.map(d => d.passage) || [],
+    }))
   }
 
   const fetchCommunityData = async () => {
@@ -174,7 +219,7 @@ export default function App() {
       return
     }
 
-    const todayKey = new Date().toISOString().slice(0, 10)
+    const todayKey = getDateKey(new Date())
     const groupedByUser = {}
 
     ;(Array.isArray(completionRows) ? completionRows : []).forEach(row => {
@@ -208,7 +253,7 @@ export default function App() {
         const cursor = new Date()
 
         while (true) {
-          const dateKey = cursor.toISOString().slice(0, 10)
+          const dateKey = getDateKey(cursor)
           const uniquePassages = userDates[dateKey]?.size || 0
 
           if (uniquePassages >= 4) {
@@ -232,8 +277,25 @@ export default function App() {
   }
 
   useEffect(() => {
-    fetchTodaysCompletions()
-  }, [session, todaysReading])
+    if (!session) return
+
+    let isCurrent = true
+    queryReadingCompletions(session.user.id, selectedReadingDate).then(({ data, error }) => {
+      if (!isCurrent) return
+      if (error) {
+        console.error('Error fetching completions', error)
+        return
+      }
+      setCompletionsByDate(prev => ({
+        ...prev,
+        [`${session.user.id}:${selectedReadingDate}`]: data?.map(row => row.passage) || [],
+      }))
+    })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [session, selectedReadingDate])
 
   useEffect(() => {
     if (!session) return
@@ -262,7 +324,7 @@ export default function App() {
       // fetch last 60 days of completions for this user
       const since = new Date()
       since.setDate(since.getDate() - 60)
-      const sinceStr = since.toISOString().slice(0, 10)
+      const sinceStr = getDateKey(since)
       const { data, error } = await supabase
         .from('completions')
         .select('reading_date, passage')
@@ -282,17 +344,17 @@ export default function App() {
       // Group by date (normalize to YYYY-MM-DD)
       const groups = {}
       rows.forEach(row => {
-        const dateKey = row && row.reading_date ? new Date(row.reading_date).toISOString().slice(0, 10) : null
+        const dateKey = row?.reading_date || null
         if (!dateKey) return
         if (!groups[dateKey]) groups[dateKey] = new Set()
         groups[dateKey].add(row.passage)
       })
 
-      // Merge local today's completions so toggles update streak immediately
-      const todayKey = new Date().toISOString().slice(0, 10)
-      if (todaysCompletions && todaysCompletions.length) {
+      // Merge local completions for today so toggles update streak immediately.
+      const todayKey = getDateKey(new Date())
+      if (selectedReadingDate === todayKey && readingCompletions.length) {
         if (!groups[todayKey]) groups[todayKey] = new Set()
-        todaysCompletions.forEach(p => groups[todayKey].add(p))
+        readingCompletions.forEach(p => groups[todayKey].add(p))
       }
 
       
@@ -301,7 +363,7 @@ export default function App() {
       let count = 0
       const today = new Date()
       while (true) {
-        const dStr = today.toISOString().slice(0, 10)
+        const dStr = getDateKey(today)
         if (groups[dStr] && groups[dStr].size >= 4) {
           count += 1
           today.setDate(today.getDate() - 1)
@@ -312,7 +374,7 @@ export default function App() {
       setStreak(count)
     }
     computeStreak()
-  }, [session, todaysCompletions])
+  }, [session, readingCompletions, selectedReadingDate])
 
   async function handleSignUp() {
     setLoading(true)
@@ -349,11 +411,11 @@ export default function App() {
     await supabase.auth.signOut()
   }
 
-  const passages = todaysReading ? [
-    { key: 'family1', label: 'Family 1', passage: todaysReading.family1 },
-    { key: 'family2', label: 'Family 2', passage: todaysReading.family2 },
-    { key: 'secret1', label: 'Secret 1', passage: todaysReading.secret1 },
-    { key: 'secret2', label: 'Secret 2', passage: todaysReading.secret2 },
+  const passages = selectedReading ? [
+    { key: 'family1', label: 'Family 1', passage: selectedReading.family1 },
+    { key: 'family2', label: 'Family 2', passage: selectedReading.family2 },
+    { key: 'secret1', label: 'Secret 1', passage: selectedReading.secret1 },
+    { key: 'secret2', label: 'Secret 2', passage: selectedReading.secret2 },
   ] : []
 
   useEffect(() => {
@@ -373,21 +435,21 @@ export default function App() {
     return () => {
       audioRequestRef.current?.abort()
       audioRequestRef.current = null
-      audioRef.current?.pause()
-      audioRef.current = null
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current)
-        audioUrlRef.current = null
-      }
+      audioSourceRef.current?.stop()
+      audioSourceRef.current = null
+      audioContextRef.current?.close()
+      audioContextRef.current = null
     }
-  }, [readingPassageIndex])
+  }, [])
 
   const openReadingMode = index => {
     if (!passages[index]) return
     audioRequestRef.current?.abort()
     audioRequestRef.current = null
-    audioRef.current?.pause()
-    if (audioRef.current) audioRef.current.currentTime = 0
+    audioSourceRef.current?.stop()
+    audioSourceRef.current = null
+    audioBufferRef.current = null
+    audioOffsetRef.current = 0
     setIsAudioLoading(false)
     setIsAudioPlaying(false)
     setAudioError('')
@@ -411,8 +473,10 @@ export default function App() {
     if (isClosingReadingMode) return
     audioRequestRef.current?.abort()
     audioRequestRef.current = null
-    audioRef.current?.pause()
-    if (audioRef.current) audioRef.current.currentTime = 0
+    audioSourceRef.current?.stop()
+    audioSourceRef.current = null
+    audioBufferRef.current = null
+    audioOffsetRef.current = 0
     setIsAudioLoading(false)
     setIsAudioPlaying(false)
     setAudioError('')
@@ -427,8 +491,10 @@ export default function App() {
     if (readingPassageIndex === null) return
     audioRequestRef.current?.abort()
     audioRequestRef.current = null
-    audioRef.current?.pause()
-    if (audioRef.current) audioRef.current.currentTime = 0
+    audioSourceRef.current?.stop()
+    audioSourceRef.current = null
+    audioBufferRef.current = null
+    audioOffsetRef.current = 0
     setIsAudioLoading(false)
     setIsAudioPlaying(false)
     setAudioError('')
@@ -453,22 +519,26 @@ export default function App() {
     moveReadingPassage(1)
   }
 
-  const handleAudioPlaybackError = error => {
-    console.error('Error playing passage audio', error)
-    setAudioError('Unable to play audio. Please try again.')
-    setIsAudioPlaying(false)
-  }
+  const startPassageAudio = () => {
+    const context = audioContextRef.current
+    const buffer = audioBufferRef.current
+    if (!context || !buffer) return
 
-  const playPassageAudio = async audio => {
-    audio.currentTime = 0
+    const source = context.createBufferSource()
+    source.buffer = buffer
+    source.connect(context.destination)
+    source.onended = () => {
+      if (audioSourceRef.current !== source) return
+      audioSourceRef.current = null
+      audioOffsetRef.current = 0
+      setIsAudioPlaying(false)
+      autoAdvanceToNextPassage()
+    }
+    audioStartTimeRef.current = context.currentTime
+    audioSourceRef.current = source
+    source.start(0, audioOffsetRef.current)
     setAudioError('')
     setIsAudioPlaying(true)
-
-    try {
-      await audio.play()
-    } catch (error) {
-      if (audioRef.current === audio) handleAudioPlaybackError(error)
-    }
   }
 
   const handleVoiceChange = voiceId => {
@@ -476,12 +546,10 @@ export default function App() {
 
     audioRequestRef.current?.abort()
     audioRequestRef.current = null
-    audioRef.current?.pause()
-    audioRef.current = null
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current)
-      audioUrlRef.current = null
-    }
+    audioSourceRef.current?.stop()
+    audioSourceRef.current = null
+    audioBufferRef.current = null
+    audioOffsetRef.current = 0
 
     setIsAudioLoading(false)
     setIsAudioPlaying(false)
@@ -500,12 +568,10 @@ export default function App() {
 
     audioRequestRef.current?.abort()
     audioRequestRef.current = null
-    audioRef.current?.pause()
-    audioRef.current = null
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current)
-      audioUrlRef.current = null
-    }
+    audioSourceRef.current?.stop()
+    audioSourceRef.current = null
+    audioBufferRef.current = null
+    audioOffsetRef.current = 0
 
     setIsAudioLoading(false)
     setIsAudioPlaying(false)
@@ -521,20 +587,39 @@ export default function App() {
 
   const handleAudioButtonClick = async () => {
     if (isAudioPlaying) {
-      audioRef.current?.pause()
-      if (audioRef.current) audioRef.current.currentTime = 0
+      const context = audioContextRef.current
+      if (context && audioSourceRef.current) {
+        audioOffsetRef.current += context.currentTime - audioStartTimeRef.current
+        const source = audioSourceRef.current
+        audioSourceRef.current = null
+        source.stop()
+      }
       setIsAudioPlaying(false)
       return
     }
 
-    if (audioRef.current) {
-      await playPassageAudio(audioRef.current)
+    if (audioBufferRef.current) {
+      try {
+        await audioContextRef.current?.resume()
+        startPassageAudio()
+      } catch (error) {
+        console.error('Error resuming passage audio', error)
+        setAudioError('Unable to play audio. Please try again.')
+      }
       return
     }
 
     const passageText = passageTexts[passages[readingPassageIndex]?.key]
     if (!passageText) return
 
+    const AudioContextClass = window.AudioContext
+    if (!AudioContextClass) {
+      setAudioError('Audio playback is not supported in this browser.')
+      return
+    }
+
+    const context = audioContextRef.current || new AudioContextClass()
+    audioContextRef.current = context
     const controller = new AbortController()
     audioRequestRef.current = controller
     setAudioError('')
@@ -543,6 +628,7 @@ export default function App() {
     let responseStatus = null
 
     try {
+      await context.resume()
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -561,21 +647,14 @@ export default function App() {
         throw new Error(`Audio request failed with status ${response.status}: ${responseBody}`)
       }
 
-      const audioUrl = URL.createObjectURL(await response.blob())
+      const audioBlob = await response.blob()
       if (controller.signal.aborted) {
-        URL.revokeObjectURL(audioUrl)
         return
       }
 
-      audioUrlRef.current = audioUrl
-      const audio = new Audio(audioUrl)
-      audio.onended = () => {
-        setIsAudioPlaying(false)
-        autoAdvanceToNextPassage()
-      }
-      audio.onerror = () => handleAudioPlaybackError(new Error('The audio could not be decoded.'))
-      audioRef.current = audio
-      await playPassageAudio(audio)
+      audioBufferRef.current = await context.decodeAudioData(await audioBlob.arrayBuffer())
+      if (controller.signal.aborted) return
+      startPassageAudio()
     } catch (error) {
       if (!controller.signal.aborted) {
         console.error('Error loading passage audio', {
@@ -605,27 +684,45 @@ export default function App() {
     moveReadingPassage(distance < 0 ? 1 : -1)
   }
 
+  const moveReadingDate = direction => {
+    const nextDate = new Date(selectedDate)
+    nextDate.setDate(nextDate.getDate() + direction)
+    const nextDateKey = getDateKey(nextDate)
+
+    if (nextDateKey > todayDateKey) return
+    setSelectedReadingDate(nextDateKey)
+  }
+
+  const returnToToday = () => {
+    setSelectedReadingDate(todayDateKey)
+  }
+
   const toggleCompletion = async (passage, checked) => {
     if (!session) return
-    const today = new Date().toISOString().slice(0, 10)
+    const dateKey = selectedReadingDate
+    const cacheKey = `${session.user.id}:${dateKey}`
 
     if (checked) {
-      // add
-      setTodaysCompletions(prev => Array.from(new Set([...prev, passage])))
-      const { error } = await supabase.from('completions').insert([{ user_id: session.user.id, reading_date: today, passage }])
+      setCompletionsByDate(prev => ({
+        ...prev,
+        [cacheKey]: Array.from(new Set([...(prev[cacheKey] || []), passage])),
+      }))
+      const { error } = await supabase.from('completions').insert([{ user_id: session.user.id, reading_date: dateKey, passage }])
       if (error) {
         console.error('Insert completion error', error)
       } else {
-        await fetchTodaysCompletions()
+        await fetchReadingCompletions(dateKey)
       }
     } else {
-      // remove
-      setTodaysCompletions(prev => prev.filter(p => p !== passage))
-      const { error } = await supabase.from('completions').delete().match({ user_id: session.user.id, reading_date: today, passage })
+      setCompletionsByDate(prev => ({
+        ...prev,
+        [cacheKey]: (prev[cacheKey] || []).filter(item => item !== passage),
+      }))
+      const { error } = await supabase.from('completions').delete().match({ user_id: session.user.id, reading_date: dateKey, passage })
       if (error) {
         console.error('Delete completion error', error)
       } else {
-        await fetchTodaysCompletions()
+        await fetchReadingCompletions(dateKey)
       }
     }
   }
@@ -681,7 +778,7 @@ export default function App() {
     if (readingPassageIndex !== null && passages[readingPassageIndex]) {
       const readingPassage = passages[readingPassageIndex]
       const passageText = passageTexts[readingPassage.key]
-      const isRead = todaysCompletions.includes(readingPassage.passage)
+      const isRead = readingCompletions.includes(readingPassage.passage)
 
       return (
         <div
@@ -801,15 +898,49 @@ export default function App() {
             </div>
           </div>
 
-          {todaysReading && (
+          {selectedReading && (
             <div className="mb-6">
-              <div className="flex items-baseline justify-between mb-3">
-                <p className="text-xs font-medium text-stone-400 uppercase tracking-wide">
-                  Today — {todaysReading.date}
-                </p>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => moveReadingDate(-1)}
+                    aria-label="Go to previous reading day"
+                    className="rounded-lg border border-emerald-100 px-2 py-1 text-sm text-emerald-800 transition hover:bg-emerald-50"
+                  >
+                    ←
+                  </button>
+                  <p className="text-xs font-medium uppercase tracking-wide text-stone-500">
+                    {isToday ? 'Today' : 'Reading'} — {selectedDate.toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => moveReadingDate(1)}
+                    disabled={isToday}
+                    aria-label="Go to next reading day"
+                    className="rounded-lg border border-emerald-100 px-2 py-1 text-sm text-emerald-800 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    →
+                  </button>
+                  {!isToday && (
+                    <button
+                      type="button"
+                      onClick={returnToToday}
+                      className="text-xs font-semibold text-emerald-700 hover:text-emerald-900"
+                    >
+                      Today
+                    </button>
+                  )}
+                </div>
                 <p className="text-xs text-stone-400">🔥 {streak} day streak</p>
               </div>
-              <p className="text-xs text-stone-500 mb-2">{todaysCompletions.length} of 4 read today</p>
+              <p className="mb-2 text-xs text-stone-500">
+                {readingCompletions.length} of 4 read {isToday ? 'today' : 'for this day'}
+              </p>
               <div className="space-y-2">
                 {passages.map(({ key, label, passage }, index) => (
                   <div
@@ -824,7 +955,7 @@ export default function App() {
                       <div className="flex min-w-0 items-center gap-3">
                         <input
                           type="checkbox"
-                          checked={todaysCompletions.includes(passage)}
+                          checked={readingCompletions.includes(passage)}
                           onClick={event => event.stopPropagation()}
                           onChange={e => toggleCompletion(passage, e.target.checked)}
                           className="h-4 w-4 shrink-0 accent-emerald-700"
