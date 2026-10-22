@@ -65,6 +65,30 @@ function sendJson(res, statusCode, body) {
   res.end(JSON.stringify(body))
 }
 
+function getSafeErrorMessage(error, apiKey) {
+  const message = error instanceof Error ? error.message : String(error)
+  return message
+    .replaceAll(apiKey, '[redacted]')
+    .slice(0, 500)
+}
+
+async function getProviderErrorMessage(response, apiKey) {
+  const responseText = await response.text()
+  let message = responseText
+
+  try {
+    const body = JSON.parse(responseText)
+    const detail = body?.detail
+    message = typeof detail === 'string'
+      ? detail
+      : detail?.message || body?.message || body?.error || responseText
+  } catch {
+    // Preserve a non-JSON provider response as the diagnostic message.
+  }
+
+  return getSafeErrorMessage(message, apiKey)
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST')
@@ -93,13 +117,17 @@ export default async function handler(req, res) {
   try {
     firstResponse = await requestAudioChunk(textChunks[0], voiceId, modelId, apiKey)
   } catch (error) {
-    console.error('Unable to reach ElevenLabs.', error)
-    return sendJson(res, 502, { error: 'Unable to reach the audio service.' })
+    const message = getSafeErrorMessage(error, apiKey)
+    console.error('Unable to reach ElevenLabs.', message)
+    return sendJson(res, 502, { error: `Unable to reach ElevenLabs: ${message}` })
   }
 
   if (!firstResponse.ok) {
-    console.error(`ElevenLabs returned status ${firstResponse.status}.`)
-    return sendJson(res, firstResponse.status, { error: 'Audio generation failed.' })
+    const message = await getProviderErrorMessage(firstResponse, apiKey)
+    console.error(`ElevenLabs returned status ${firstResponse.status}: ${message}`)
+    return sendJson(res, firstResponse.status, {
+      error: `ElevenLabs returned ${firstResponse.status}: ${message}`,
+    })
   }
 
   if (!firstResponse.body) {
@@ -117,8 +145,11 @@ export default async function handler(req, res) {
       for (const textChunk of textChunks.slice(1)) {
         const response = await requestAudioChunk(textChunk, voiceId, modelId, apiKey)
         if (!response.ok || !response.body) {
-          console.error(`ElevenLabs returned status ${response.status} for a subsequent audio chunk.`)
-          throw new Error('Audio generation failed for a subsequent chunk.')
+          const message = response.body
+            ? await getProviderErrorMessage(response, apiKey)
+            : 'The provider returned an empty audio response.'
+          console.error(`ElevenLabs returned status ${response.status} for a subsequent audio chunk: ${message}`)
+          throw new Error(`ElevenLabs returned ${response.status} for a subsequent audio chunk: ${message}`)
         }
         yield* Readable.fromWeb(response.body)
       }
@@ -126,9 +157,10 @@ export default async function handler(req, res) {
 
     await pipeline(Readable.from(streamAudio()), res)
   } catch (error) {
-    console.error('Unable to stream audio to the client.', error)
+    const message = getSafeErrorMessage(error, apiKey)
+    console.error('Unable to stream audio to the client.', message)
     if (!res.headersSent) {
-      sendJson(res, 502, { error: 'Unable to stream generated audio.' })
+      sendJson(res, 502, { error: `Unable to stream generated audio: ${message}` })
     } else {
       res.destroy(error)
     }

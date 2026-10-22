@@ -644,7 +644,16 @@ export default function App() {
 
       if (!response.ok) {
         const responseBody = await response.text()
-        throw new Error(`Audio request failed with status ${response.status}: ${responseBody}`)
+        let errorMessage = `Audio request failed with status ${response.status}.`
+        try {
+          const errorBody = JSON.parse(responseBody)
+          if (typeof errorBody.error === 'string') {
+            errorMessage = errorBody.error
+          }
+        } catch {
+          if (responseBody) errorMessage = responseBody.slice(0, 500)
+        }
+        throw new Error(errorMessage)
       }
 
       const audioBlob = await response.blob()
@@ -661,7 +670,7 @@ export default function App() {
           statusCode: responseStatus,
           errorMessage: error instanceof Error ? error.message : String(error),
         })
-        setAudioError('Unable to load audio. Please try again.')
+        setAudioError(error instanceof Error ? error.message : 'Unable to load audio. Please try again.')
       }
     } finally {
       if (audioRequestRef.current === controller) {
