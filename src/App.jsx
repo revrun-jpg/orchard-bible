@@ -4,10 +4,7 @@ import mcheyneData from './data/mcheyne.json'
 
 const ESV_API_KEY = import.meta.env.VITE_ESV_API_KEY
 const EMPTY_COMPLETIONS = []
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-]
+const PLAN_START_DATE = Date.UTC(2026, 1, 1)
 
 const getDateKey = date => [
   date.getFullYear(),
@@ -16,15 +13,10 @@ const getDateKey = date => [
 ].join('-')
 
 const getReadingForDate = date => {
-  const dateLabel = `${MONTH_NAMES[date.getMonth()]} ${date.getDate()}`
-  const reading = mcheyneData.data.find(entry => entry.date === dateLabel)
-
-  if (reading || date.getMonth() !== 1 || date.getDate() !== 29) {
-    return reading
-  }
-
-  // The plan has 365 entries, so February 29 follows the February 28 reading.
-  return mcheyneData.data.find(entry => entry.date === 'February 28')
+  const dayIndex = Math.floor((
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) - PLAN_START_DATE
+  ) / (1000 * 60 * 60 * 24))
+  return mcheyneData.data[dayIndex]
 }
 
 const queryReadingCompletions = (userId, dateKey) => supabase
