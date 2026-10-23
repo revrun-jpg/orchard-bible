@@ -1,20 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import mcheyneData from './data/mcheyne.json'
 
 const ESV_API_KEY = import.meta.env.VITE_ESV_API_KEY
-const ELEVENLABS_VOICES = [
-  { id: 'auq43ws1oslv0tO4BDa7', name: 'Adam Stone' },
-  { id: 'GoGUcAZovo4MFeLxJdZd', name: 'Noah' },
-  { id: 'TYKLc7ViOIGE13dSZYlK', name: 'Eve' },
-  { id: 'G4Wh6MqJNTzYtuAeMqv5', name: 'Rachel' },
-]
-const ELEVENLABS_MODELS = [
-  { id: 'eleven_multilingual_v2', name: 'Multilingual v2 (standard)' },
-  { id: 'eleven_flash_v2_5', name: 'Flash v2.5 (faster)' },
-]
-const VOICE_PREFERENCE_KEY = 'orchard-bible-elevenlabs-voice'
-const MODEL_PREFERENCE_KEY = 'orchard-bible-elevenlabs-model'
 const EMPTY_COMPLETIONS = []
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -45,30 +33,6 @@ const queryReadingCompletions = (userId, dateKey) => supabase
   .eq('user_id', userId)
   .eq('reading_date', dateKey)
 
-const getSavedVoiceId = () => {
-  try {
-    const savedVoiceId = window.localStorage.getItem(VOICE_PREFERENCE_KEY)
-    return ELEVENLABS_VOICES.some(voice => voice.id === savedVoiceId)
-      ? savedVoiceId
-      : ELEVENLABS_VOICES[0].id
-  } catch (error) {
-    console.error('Unable to read saved narration voice', error)
-    return ELEVENLABS_VOICES[0].id
-  }
-}
-
-const getSavedModelId = () => {
-  try {
-    const savedModelId = window.localStorage.getItem(MODEL_PREFERENCE_KEY)
-    return ELEVENLABS_MODELS.some(model => model.id === savedModelId)
-      ? savedModelId
-      : ELEVENLABS_MODELS[0].id
-  } catch (error) {
-    console.error('Unable to read saved narration model', error)
-    return ELEVENLABS_MODELS[0].id
-  }
-}
-
 export default function App() {
   const [session, setSession] = useState(null)
   const [email, setEmail] = useState('')
@@ -83,17 +47,6 @@ export default function App() {
   const [readingDirection, setReadingDirection] = useState('next')
   const [touchStartX, setTouchStartX] = useState(null)
   const [isClosingReadingMode, setIsClosingReadingMode] = useState(false)
-  const [isAudioLoading, setIsAudioLoading] = useState(false)
-  const [isAudioPlaying, setIsAudioPlaying] = useState(false)
-  const [audioError, setAudioError] = useState('')
-  const [selectedVoiceId, setSelectedVoiceId] = useState(getSavedVoiceId)
-  const [selectedModelId, setSelectedModelId] = useState(getSavedModelId)
-  const audioContextRef = useRef(null)
-  const audioBufferRef = useRef(null)
-  const audioSourceRef = useRef(null)
-  const audioStartTimeRef = useRef(0)
-  const audioOffsetRef = useRef(0)
-  const audioRequestRef = useRef(null)
   const [streak, setStreak] = useState(0)
   const [communityMembers, setCommunityMembers] = useState([])
   const [leaderboard, setLeaderboard] = useState([])
@@ -431,28 +384,8 @@ export default function App() {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [readingPassageIndex])
 
-  useEffect(() => {
-    return () => {
-      audioRequestRef.current?.abort()
-      audioRequestRef.current = null
-      audioSourceRef.current?.stop()
-      audioSourceRef.current = null
-      audioContextRef.current?.close()
-      audioContextRef.current = null
-    }
-  }, [])
-
   const openReadingMode = index => {
     if (!passages[index]) return
-    audioRequestRef.current?.abort()
-    audioRequestRef.current = null
-    audioSourceRef.current?.stop()
-    audioSourceRef.current = null
-    audioBufferRef.current = null
-    audioOffsetRef.current = 0
-    setIsAudioLoading(false)
-    setIsAudioPlaying(false)
-    setAudioError('')
     setIsClosingReadingMode(false)
     setReadingDirection('next')
     setReadingPassageIndex(index)
@@ -471,15 +404,6 @@ export default function App() {
 
   const closeReadingMode = () => {
     if (isClosingReadingMode) return
-    audioRequestRef.current?.abort()
-    audioRequestRef.current = null
-    audioSourceRef.current?.stop()
-    audioSourceRef.current = null
-    audioBufferRef.current = null
-    audioOffsetRef.current = 0
-    setIsAudioLoading(false)
-    setIsAudioPlaying(false)
-    setAudioError('')
     setIsClosingReadingMode(true)
     window.setTimeout(() => {
       setReadingPassageIndex(null)
@@ -489,15 +413,6 @@ export default function App() {
 
   const moveReadingPassage = direction => {
     if (readingPassageIndex === null) return
-    audioRequestRef.current?.abort()
-    audioRequestRef.current = null
-    audioSourceRef.current?.stop()
-    audioSourceRef.current = null
-    audioBufferRef.current = null
-    audioOffsetRef.current = 0
-    setIsAudioLoading(false)
-    setIsAudioPlaying(false)
-    setAudioError('')
 
     const nextIndex = readingPassageIndex + direction
     if (nextIndex < 0 || nextIndex >= passages.length) {
@@ -507,177 +422,6 @@ export default function App() {
 
     setReadingDirection(direction > 0 ? 'next' : 'previous')
     setReadingPassageIndex(nextIndex)
-  }
-
-  const autoAdvanceToNextPassage = () => {
-    if (readingPassageIndex === null) return
-    if (readingPassageIndex >= passages.length - 1) {
-      closeReadingMode()
-      return
-    }
-
-    moveReadingPassage(1)
-  }
-
-  const startPassageAudio = () => {
-    const context = audioContextRef.current
-    const buffer = audioBufferRef.current
-    if (!context || !buffer) return
-
-    const source = context.createBufferSource()
-    source.buffer = buffer
-    source.connect(context.destination)
-    source.onended = () => {
-      if (audioSourceRef.current !== source) return
-      audioSourceRef.current = null
-      audioOffsetRef.current = 0
-      setIsAudioPlaying(false)
-      autoAdvanceToNextPassage()
-    }
-    audioStartTimeRef.current = context.currentTime
-    audioSourceRef.current = source
-    source.start(0, audioOffsetRef.current)
-    setAudioError('')
-    setIsAudioPlaying(true)
-  }
-
-  const handleVoiceChange = voiceId => {
-    if (voiceId === selectedVoiceId) return
-
-    audioRequestRef.current?.abort()
-    audioRequestRef.current = null
-    audioSourceRef.current?.stop()
-    audioSourceRef.current = null
-    audioBufferRef.current = null
-    audioOffsetRef.current = 0
-
-    setIsAudioLoading(false)
-    setIsAudioPlaying(false)
-    setAudioError('')
-    setSelectedVoiceId(voiceId)
-    try {
-      window.localStorage.setItem(VOICE_PREFERENCE_KEY, voiceId)
-    } catch (error) {
-      console.error('Unable to save narration voice preference', error)
-      setAudioError('Unable to save your voice preference on this device.')
-    }
-  }
-
-  const handleModelChange = modelId => {
-    if (modelId === selectedModelId) return
-
-    audioRequestRef.current?.abort()
-    audioRequestRef.current = null
-    audioSourceRef.current?.stop()
-    audioSourceRef.current = null
-    audioBufferRef.current = null
-    audioOffsetRef.current = 0
-
-    setIsAudioLoading(false)
-    setIsAudioPlaying(false)
-    setAudioError('')
-    setSelectedModelId(modelId)
-    try {
-      window.localStorage.setItem(MODEL_PREFERENCE_KEY, modelId)
-    } catch (error) {
-      console.error('Unable to save narration model preference', error)
-      setAudioError('Unable to save your narration model preference on this device.')
-    }
-  }
-
-  const handleAudioButtonClick = async () => {
-    if (isAudioPlaying) {
-      const context = audioContextRef.current
-      if (context && audioSourceRef.current) {
-        audioOffsetRef.current += context.currentTime - audioStartTimeRef.current
-        const source = audioSourceRef.current
-        audioSourceRef.current = null
-        source.stop()
-      }
-      setIsAudioPlaying(false)
-      return
-    }
-
-    if (audioBufferRef.current) {
-      try {
-        await audioContextRef.current?.resume()
-        startPassageAudio()
-      } catch (error) {
-        console.error('Error resuming passage audio', error)
-        setAudioError('Unable to play audio. Please try again.')
-      }
-      return
-    }
-
-    const passageText = passageTexts[passages[readingPassageIndex]?.key]
-    if (!passageText) return
-
-    const AudioContextClass = window.AudioContext
-    if (!AudioContextClass) {
-      setAudioError('Audio playback is not supported in this browser.')
-      return
-    }
-
-    const context = audioContextRef.current || new AudioContextClass()
-    audioContextRef.current = context
-    const controller = new AbortController()
-    audioRequestRef.current = controller
-    setAudioError('')
-    setIsAudioLoading(true)
-
-    let responseStatus = null
-
-    try {
-      await context.resume()
-      const response = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: passageText,
-          voiceId: selectedVoiceId,
-          modelId: selectedModelId,
-        }),
-        signal: controller.signal,
-      })
-
-      responseStatus = response.status
-
-      if (!response.ok) {
-        const responseBody = await response.text()
-        let errorMessage = `Audio request failed with status ${response.status}.`
-        try {
-          const errorBody = JSON.parse(responseBody)
-          if (typeof errorBody.error === 'string') {
-            errorMessage = errorBody.error
-          }
-        } catch {
-          if (responseBody) errorMessage = responseBody.slice(0, 500)
-        }
-        throw new Error(errorMessage)
-      }
-
-      const audioBlob = await response.blob()
-      if (controller.signal.aborted) {
-        return
-      }
-
-      audioBufferRef.current = await context.decodeAudioData(await audioBlob.arrayBuffer())
-      if (controller.signal.aborted) return
-      startPassageAudio()
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        console.error('Error loading passage audio', {
-          statusCode: responseStatus,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        })
-        setAudioError(error instanceof Error ? error.message : 'Unable to load audio. Please try again.')
-      }
-    } finally {
-      if (audioRequestRef.current === controller) {
-        audioRequestRef.current = null
-        setIsAudioLoading(false)
-      }
-    }
   }
 
   const handleReadingTouchStart = event => {
@@ -811,53 +555,6 @@ export default function App() {
           </header>
 
           <main key={`${readingPassage.key}-${readingDirection}`} className={`reading-page reading-page-${readingDirection} flex-1 overflow-y-auto px-5 py-8 sm:px-12 sm:py-12`}>
-            <div className="mx-auto mb-6 flex max-w-2xl flex-wrap items-center gap-2">
-              <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Narration voice">
-                {ELEVENLABS_VOICES.map(voice => (
-                  <button
-                    key={voice.id}
-                    type="button"
-                    onClick={() => handleVoiceChange(voice.id)}
-                    aria-pressed={selectedVoiceId === voice.id}
-                    className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
-                      selectedVoiceId === voice.id
-                        ? 'border-emerald-800 bg-emerald-800 text-white'
-                        : 'border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-50'
-                    }`}
-                  >
-                    {voice.name}
-                  </button>
-                ))}
-              </div>
-              <label className="flex items-center gap-2 text-xs font-semibold text-emerald-900">
-                Model
-                <select
-                  value={selectedModelId}
-                  onChange={event => handleModelChange(event.target.value)}
-                  aria-label="Narration model"
-                  className="max-w-full rounded-full border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                >
-                  {ELEVENLABS_MODELS.map(model => (
-                    <option key={model.id} value={model.id}>{model.name}</option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                onClick={handleAudioButtonClick}
-                disabled={isAudioLoading || !passageText}
-                aria-label={isAudioPlaying ? 'Pause passage audio' : 'Play passage audio'}
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isAudioLoading ? (
-                  <>
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-700/30 border-t-emerald-700" aria-hidden="true" />
-                    Loading...
-                  </>
-                ) : isAudioPlaying ? '⏸ Pause' : '▶️ Play'}
-              </button>
-              {audioError && <p role="alert" className="text-sm text-red-700">{audioError}</p>}
-            </div>
             <article className="mx-auto max-w-2xl pb-8 text-[1.2rem] leading-[2] text-stone-700 sm:text-[1.35rem]">
               {passageText || 'Loading passage text...'}
             </article>
